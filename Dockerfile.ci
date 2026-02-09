@@ -1,0 +1,175 @@
+# WAN 2.2 RunPod Template - CI-Optimized Dockerfile
+# Lightweight build for GitHub Actions - PyTorch installed at runtime
+# Author: AI IDE Agent
+# Date: 2025-10-11
+
+# ============================================================================
+# Stage 1: Base image with CUDA 12.8.1 (NO PyTorch - installed at runtime)
+# ============================================================================
+# Using devel image (includes nvcc) for SageAttention2++ compilation at runtime
+FROM nvidia/cuda:12.8.1-cudnn-devel-ubuntu24.04 AS base
+
+# Build arguments
+ARG COMFYUI_VERSION=v0.3.56
+
+# Environment variables
+ENV DEBIAN_FRONTEND=noninteractive
+ENV PIP_PREFER_BINARY=1
+ENV PYTHONUNBUFFERED=1
+ENV PIP_NO_INPUT=1
+
+# Install system dependencies
+RUN apt-get update && apt-get install -y \
+    python3.12 \
+    python3.12-venv \
+    python3.12-dev \
+    build-essential \
+    git \
+    wget \
+    curl \
+    aria2 \
+    libgl1 \
+    libglib2.0-0 \
+    libsm6 \
+    libxext6 \
+    libxrender1 \
+    ffmpeg \
+    && ln -sf /usr/bin/python3.12 /usr/bin/python \
+    && ln -sf /usr/bin/pip3 /usr/bin/pip \
+    && apt-get autoremove -y && apt-get clean -y && rm -rf /var/lib/apt/lists/*
+
+# Install uv (fast Python package installer)
+RUN wget -qO- https://astral.sh/uv/install.sh | sh \
+    && ln -s /root/.local/bin/uv /usr/local/bin/uv \
+    && ln -s /root/.local/bin/uvx /usr/local/bin/uvx \
+    && uv venv /opt/venv
+
+# Use the virtual environment
+ENV PATH="/opt/venv/bin:${PATH}"
+
+# Install comfy-cli and basic dependencies (lightweight)
+RUN uv pip install --no-cache comfy-cli pip setuptools wheel \
+    && rm -rf /root/.cache/uv && rm -rf /tmp/*
+
+# Stay in root directory
+WORKDIR /
+
+# Install RunPod handler dependencies (lightweight)
+RUN uv pip install --no-cache runpod requests websocket-client \
+    && rm -rf /root/.cache/uv && rm -rf /tmp/*
+
+# Copy extra_model_paths.yaml to /etc for later use in runtime-init
+# (We don't create /comfyui yet - let comfy-cli do it at runtime)
+# This is done AFTER cleanup to ensure it persists
+COPY runpod-worker-comfyui/src/extra_model_paths.yaml /etc/extra_model_paths.yaml
+
+# ============================================================================
+# Stage 2: Final Configuration
+# ============================================================================
+FROM base AS final
+
+WORKDIR /
+
+# Copy handler and scripts from local runpod-worker-comfyui directory
+COPY runpod-worker-comfyui/handler.py /handler.py
+
+# Copy model download script
+COPY scripts/download_models.sh /scripts/download_models.sh
+RUN chmod +x /scripts/download_models.sh
+
+# Copy runtime initialization script (installs ComfyUI, PyTorch, custom nodes at runtime)
+COPY scripts/runtime-init.sh /scripts/runtime-init.sh
+RUN chmod +x /scripts/runtime-init.sh
+
+# Create custom start script that runs runtime-init then starts services
+# OPTIMIZED: JupyterLab starts IMMEDIATELY after init, BEFORE model downloads
+# This allows users to access JupyterLab to download additional models while WAN models are loading
+RUN printf '#!/usr/bin/env bash\n\
+\n\
+echo ""\n\
+echo "╔═══════════════════════════════════════════════════════════════════╗"\n\
+echo "║           WAN 2.2 RunPod Template - Starting Up                   ║"\n\
+echo "╚═══════════════════════════════════════════════════════════════════╝"\n\
+echo ""\n\
+\n\
+# Run runtime initialization (ComfyUI, PyTorch, custom nodes, SageAttention)\n\
+/scripts/runtime-init.sh\n\
+\n\
+# Use libtcmalloc for better memory management\n\
+TCMALLOC="$(ldconfig -p | grep -Po "libtcmalloc.so.\\d" | head -n 1)"\n\
+export LD_PRELOAD="${TCMALLOC}"\n\
+\n\
+# Ensure /comfyui has proper permissions\n\
+chmod -R 777 /comfyui\n\
+chown -R root:root /comfyui\n\
+\n\
+echo ""\n\
+echo "╔═══════════════════════════════════════════════════════════════════╗"\n\
+echo "║  🚀 JUPYTERLAB STARTING (Port 8189) - Available NOW!              ║"\n\
+echo "╚═══════════════════════════════════════════════════════════════════╝"\n\
+echo "   📂 Root: /comfyui"\n\
+echo "   🔓 Auth: Disabled (no token required)"\n\
+echo "   💡 Use JupyterLab to download additional models while WAN loads!"\n\
+echo ""\n\
+\n\
+# Start JupyterLab IMMEDIATELY (before model downloads)\n\
+jupyter lab --config=/root/.jupyter/jupyter_lab_config.py > /var/log/jupyter.log 2>&1 &\n\
+JUPYTER_PID=$!\n\
+sleep 1\n\
+if ps -p $JUPYTER_PID > /dev/null 2>&1; then\n\
+    echo "   ✅ JupyterLab running (PID: $JUPYTER_PID)"\n\
+else\n\
+    echo "   ⚠️  JupyterLab may have issues - check /var/log/jupyter.log"\n\
+fi\n\
+echo ""\n\
+\n\
+# Download models in background - JupyterLab is already accessible!\n\
+echo "╔═══════════════════════════════════════════════════════════════════╗"\n\
+echo "║  📦 MODEL DOWNLOAD STARTING (Background)                          ║"\n\
+echo "╚═══════════════════════════════════════════════════════════════════╝"\n\
+echo "   💡 JupyterLab is accessible NOW while models download!"\n\
+echo ""\n\
+/scripts/download_models.sh\n\
+echo ""\n\
+\n\
+# Allow operators to tweak verbosity; default is DEBUG\n\
+: "${COMFY_LOG_LEVEL:=DEBUG}"\n\
+\n\
+echo "╔═══════════════════════════════════════════════════════════════════╗"\n\
+echo "║  🎨 COMFYUI STARTING (Port 8188) + SageAttention                  ║"\n\
+echo "╚═══════════════════════════════════════════════════════════════════╝"\n\
+echo "   ⚡ SageAttention: ENABLED"\n\
+echo "   📊 Log Level: ${COMFY_LOG_LEVEL}"\n\
+echo ""\n\
+\n\
+# Start ComfyUI\n\
+python -u /comfyui/main.py \\\n\
+    --disable-auto-launch \\\n\
+    --disable-metadata \\\n\
+    --listen 0.0.0.0 \\\n\
+    --port 8188 \\\n\
+    --verbose "${COMFY_LOG_LEVEL}" \\\n\
+    --log-stdout \\\n\
+    --use-sage-attention\n' > /start.sh
+
+RUN chmod +x /start.sh
+
+# Expose ports
+# 8188 - ComfyUI API
+# 8189 - JupyterLab
+EXPOSE 8188 8189
+
+# Set the default command
+CMD ["/start.sh"]
+
+# Labels
+LABEL maintainer="WAN 2.2 RunPod CI-Optimized Template"
+LABEL description="RunPod template for WAN 2.2 with runtime PyTorch installation. ComfyUI on port 8188, JupyterLab on port 8189."
+LABEL cuda.version="12.8.1"
+LABEL pytorch.version="runtime-install"
+LABEL comfyui.version="v0.3.55"
+LABEL wan.version="2.2"
+LABEL template.type="ci-optimized"
+LABEL ports.comfyui="8188"
+LABEL ports.jupyterlab="8189"
+

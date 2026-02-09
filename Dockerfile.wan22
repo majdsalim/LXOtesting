@@ -1,0 +1,316 @@
+# WAN 2.2 RunPod Template - Custom Dockerfile
+# Based on runpod/worker-comfyui with CUDA 12.8.1, PyTorch nightly, and JupyterLab
+# Author: AI IDE Agent
+# Date: 2025-10-11 (Updated to use PyTorch nightly for CUDA 12.8 support)
+
+# ============================================================================
+# Stage 1: Base image with CUDA 12.8.1 and ComfyUI
+# ============================================================================
+# Using devel image (includes nvcc) for SageAttention2++ compilation at runtime
+FROM nvidia/cuda:12.8.1-cudnn-devel-ubuntu24.04 AS base
+
+# Build arguments
+ARG COMFYUI_VERSION=v0.3.56
+# Note: Using nightly builds for CUDA 12.8 support (stable version doesn't exist yet)
+
+# Environment variables
+ENV DEBIAN_FRONTEND=noninteractive
+ENV PIP_PREFER_BINARY=1
+ENV PYTHONUNBUFFERED=1
+ENV CMAKE_BUILD_PARALLEL_LEVEL=8
+ENV HF_HUB_ENABLE_HF_TRANSFER=1
+
+# Install system dependencies
+RUN apt-get update && apt-get install -y \
+    python3.12 \
+    python3.12-venv \
+    python3.12-dev \
+    build-essential \
+    git \
+    wget \
+    curl \
+    aria2 \
+    libgl1 \
+    libglib2.0-0 \
+    libsm6 \
+    libxext6 \
+    libxrender1 \
+    ffmpeg \
+    && ln -sf /usr/bin/python3.12 /usr/bin/python \
+    && ln -sf /usr/bin/pip3 /usr/bin/pip
+
+# Clean up to reduce image size
+RUN apt-get autoremove -y && apt-get clean -y && rm -rf /var/lib/apt/lists/*
+
+# Install uv (fast Python package installer)
+RUN wget -qO- https://astral.sh/uv/install.sh | sh \
+    && ln -s /root/.local/bin/uv /usr/local/bin/uv \
+    && ln -s /root/.local/bin/uvx /usr/local/bin/uvx \
+    && uv venv /opt/venv
+
+# Use the virtual environment
+ENV PATH="/opt/venv/bin:${PATH}"
+
+# Install comfy-cli and dependencies
+RUN uv pip install comfy-cli pip setuptools wheel
+
+# Install ComfyUI with CUDA 12.8 support
+# COMFY_SKIP_FETCH_REGISTRY=1 prevents the slow "FETCH ComfyRegistry Data" during build
+RUN COMFY_SKIP_FETCH_REGISTRY=1 /usr/bin/yes | comfy --workspace /comfyui install --version "${COMFYUI_VERSION}" --nvidia
+
+# Install PyTorch with CUDA 12.8 support
+# Using regular pip instead of uv pip for better compatibility with PyTorch index
+# This will install the latest available version (including nightly builds if needed)
+# CRITICAL: Use --no-cache-dir to prevent disk space issues and clean up after installation
+RUN pip install --no-cache-dir --upgrade --force-reinstall \
+    torch \
+    torchvision \
+    torchaudio \
+    --index-url https://download.pytorch.org/whl/cu128 \
+    && rm -rf /root/.cache/pip \
+    && rm -rf /tmp/*
+
+# Change to ComfyUI directory
+WORKDIR /comfyui
+
+# Support for network volumes
+ADD runpod-worker-comfyui/src/extra_model_paths.yaml ./
+
+# Go back to root
+WORKDIR /
+
+# Install RunPod handler dependencies, huggingface-cli for fast downloads, and clean up
+RUN uv pip install --no-cache runpod requests websocket-client \
+    huggingface-hub[cli,hf_transfer] \
+    && rm -rf /root/.cache/uv \
+    && rm -rf /tmp/*
+
+# ============================================================================
+# Stage 2: Install Custom Nodes
+# ============================================================================
+FROM base AS custom_nodes
+
+WORKDIR /comfyui/custom_nodes
+
+# Install ComfyUI Manager (remove if exists to ensure fresh clone)
+# Using v3.37.1 which is compatible with ComfyUI v0.3.56
+# NOTE: The "FETCH ComfyRegistry Data" messages happen at runtime when ComfyUI starts,
+# not during Docker build. This is normal behavior - ComfyUI-Manager fetches node registry
+# data to show available nodes. This only takes a few seconds and is cached.
+RUN rm -rf ComfyUI-Manager && \
+    git clone --branch 3.37.1 --depth 1 https://github.com/Comfy-Org/ComfyUI-Manager.git
+
+# Install ComfyUI Custom Scripts (remove if exists to ensure fresh clone)
+RUN rm -rf ComfyUI-Custom-Scripts && \
+    git clone https://github.com/pythongosssss/ComfyUI-Custom-Scripts.git
+
+# Install WAN Video Wrapper (remove if exists to ensure fresh clone)
+RUN rm -rf ComfyUI-WanVideoWrapper && \
+    git clone https://github.com/kijai/ComfyUI-WanVideoWrapper.git
+
+# Install ComfyUI-MatAnyone (remove if exists to ensure fresh clone)
+# Using --depth 1 for faster clone and explicitly checking out all files
+RUN rm -rf ComfyUI-MatAnyone && \
+    git clone --recursive https://github.com/FuouM/ComfyUI-MatAnyone.git && \
+    cd ComfyUI-MatAnyone && \
+    ls -la && \
+    ls -la src/ && \
+    ls -la src/core/ && \
+    ls -la src/model/
+
+# Install ComfyUI-basic_data_handling
+RUN rm -rf ComfyUI-basic_data_handling && \
+    git clone https://github.com/StableLlama/ComfyUI-basic_data_handling.git
+
+# Install ComfyUI-mxToolkit
+RUN rm -rf ComfyUI-mxToolkit && \
+    git clone https://github.com/Smirnov75/ComfyUI-mxToolkit.git
+
+# Install ComfyUI-Easy-Use
+RUN rm -rf ComfyUI-Easy-Use && \
+    git clone https://github.com/yolain/ComfyUI-Easy-Use.git
+
+# Install ComfyUI_essentials
+RUN rm -rf ComfyUI_essentials && \
+    git clone https://github.com/cubiq/ComfyUI_essentials.git
+
+# Install ComfyUI-Wan-VACE-Prep (no external dependencies)
+RUN rm -rf ComfyUI-Wan-VACE-Prep && \
+    git clone https://github.com/stuttlepress/ComfyUI-Wan-VACE-Prep.git
+
+# Install WAN Video Wrapper dependencies and clean up
+RUN uv pip install --no-cache \
+    ftfy \
+    accelerate>=1.2.1 \
+    einops \
+    diffusers>=0.33.0 \
+    peft>=0.17.0 \
+    sentencepiece>=0.2.0 \
+    protobuf \
+    pyloudnorm \
+    gguf>=0.17.1 \
+    opencv-python \
+    scipy \
+    && rm -rf /root/.cache/uv \
+    && rm -rf /tmp/*
+
+# Install ComfyUI-MatAnyone dependencies and clean up
+RUN uv pip install --no-cache \
+    omegaconf \
+    && rm -rf /root/.cache/uv \
+    && rm -rf /tmp/*
+
+# Install ComfyUI-Easy-Use dependencies (if requirements.txt exists)
+RUN if [ -f "ComfyUI-Easy-Use/requirements.txt" ]; then \
+    uv pip install --no-cache -r ComfyUI-Easy-Use/requirements.txt; \
+    fi \
+    && rm -rf /root/.cache/uv \
+    && rm -rf /tmp/*
+
+# Install ComfyUI_essentials dependencies (if requirements.txt exists)
+RUN if [ -f "ComfyUI_essentials/requirements.txt" ]; then \
+    uv pip install --no-cache -r ComfyUI_essentials/requirements.txt; \
+    fi \
+    && rm -rf /root/.cache/uv \
+    && rm -rf /tmp/*
+
+# Install ComfyUI_Fill-Nodes
+RUN rm -rf ComfyUI_Fill-Nodes && \
+    git clone https://github.com/filliptm/ComfyUI_Fill-Nodes.git
+
+# Install ComfyUI_Fill-Nodes dependencies (if requirements.txt exists)
+RUN if [ -f "ComfyUI_Fill-Nodes/requirements.txt" ]; then \
+    uv pip install --no-cache -r ComfyUI_Fill-Nodes/requirements.txt; \
+    fi \
+    && rm -rf /root/.cache/uv \
+    && rm -rf /tmp/*
+
+# Install ComfyUI core audio dependencies for nodes_audio.py, nodes_lt_audio.py, nodes_audio_encoder.py
+# These are required by ComfyUI's built-in audio nodes
+RUN uv pip install --no-cache \
+    librosa \
+    soundfile \
+    && rm -rf /root/.cache/uv \
+    && rm -rf /tmp/*
+
+# Install additional dependencies for SageAttention and clean up
+RUN uv pip install --no-cache \
+    wheel \
+    setuptools \
+    packaging \
+    ninja \
+    triton \
+    && rm -rf /root/.cache/uv \
+    && rm -rf /tmp/*
+
+# ============================================================================
+# Stage 3: Install JupyterLab (SageAttention will be compiled at runtime)
+# ============================================================================
+FROM custom_nodes AS jupyter
+
+# Install JupyterLab and related packages and clean up
+RUN uv pip install --no-cache \
+    jupyterlab \
+    notebook \
+    ipywidgets \
+    matplotlib \
+    pandas \
+    jupyter-archive \
+    && rm -rf /root/.cache/uv \
+    && rm -rf /tmp/*
+
+# Create JupyterLab configuration directory
+RUN mkdir -p /root/.jupyter
+
+# Create JupyterLab config with port 8189
+RUN echo "c.ServerApp.ip = '0.0.0.0'" > /root/.jupyter/jupyter_lab_config.py && \
+    echo "c.ServerApp.port = 8189" >> /root/.jupyter/jupyter_lab_config.py && \
+    echo "c.ServerApp.allow_root = True" >> /root/.jupyter/jupyter_lab_config.py && \
+    echo "c.ServerApp.open_browser = False" >> /root/.jupyter/jupyter_lab_config.py && \
+    echo "c.ServerApp.token = ''" >> /root/.jupyter/jupyter_lab_config.py && \
+    echo "c.ServerApp.password = ''" >> /root/.jupyter/jupyter_lab_config.py && \
+    echo "c.ServerApp.root_dir = '/comfyui'" >> /root/.jupyter/jupyter_lab_config.py
+
+# ============================================================================
+# Stage 4: Final Configuration
+# ============================================================================
+FROM jupyter AS final
+
+WORKDIR /
+
+# Copy handler and scripts from local runpod-worker-comfyui directory
+COPY runpod-worker-comfyui/handler.py /handler.py
+COPY runpod-worker-comfyui/src/start.sh /start.sh.original
+
+# Copy model download script
+COPY scripts/download_models.sh /scripts/download_models.sh
+RUN chmod +x /scripts/download_models.sh
+
+# Copy runtime initialization script (installs SageAttention at runtime)
+COPY scripts/runtime-init.sh /scripts/runtime-init.sh
+RUN chmod +x /scripts/runtime-init.sh
+
+# Create custom start script that launches both ComfyUI and JupyterLab for COMPUTE mode
+RUN printf '#!/usr/bin/env bash\n\
+\n\
+echo "WAN 2.2 RunPod Template - Starting initialization..."\n\
+\n\
+# Run runtime initialization (ComfyUI, PyTorch, SageAttention, custom nodes)\n\
+/scripts/runtime-init.sh\n\
+\n\
+# Use libtcmalloc for better memory management\n\
+TCMALLOC="$(ldconfig -p | grep -Po "libtcmalloc.so.\\d" | head -n 1)"\n\
+export LD_PRELOAD="${TCMALLOC}"\n\
+\n\
+echo "Starting services..."\n\
+\n\
+# Download models on first run (uses persistent /workspace if available)\n\
+echo "Checking for WAN 2.2 models..."\n\
+/scripts/download_models.sh\n\
+\n\
+# Start JupyterLab in the background on port 8189\n\
+echo "Starting JupyterLab on port 8189..."\n\
+jupyter lab --config=/root/.jupyter/jupyter_lab_config.py &\n\
+\n\
+# Allow operators to tweak verbosity; default is DEBUG\n\
+: "${COMFY_LOG_LEVEL:=DEBUG}"\n\
+\n\
+echo "Starting ComfyUI on port 8188 with SageAttention..."\n\
+\n\
+# Start ComfyUI with --listen 0.0.0.0 to accept external connections\n\
+# CRITICAL: --use-sage-attention flag enables SageAttention3 for Blackwell GPUs\n\
+# --listen 0.0.0.0 makes ComfyUI accessible from outside the container\n\
+# --port 8188 explicitly sets the port (default but being explicit)\n\
+python -u /comfyui/main.py \\\n\
+    --disable-auto-launch \\\n\
+    --disable-metadata \\\n\
+    --listen 0.0.0.0 \\\n\
+    --port 8188 \\\n\
+    --verbose "${COMFY_LOG_LEVEL}" \\\n\
+    --log-stdout \\\n\
+    --use-sage-attention\n' > /start.sh
+
+RUN chmod +x /start.sh
+
+# Prevent pip from asking for confirmation
+ENV PIP_NO_INPUT=1
+
+# Expose ports
+# 8188 - ComfyUI API
+# 8189 - JupyterLab
+EXPOSE 8188 8189
+
+# Set the default command
+CMD ["/start.sh"]
+
+# Labels
+LABEL maintainer="WAN 2.2 RunPod Compute Template"
+LABEL description="RunPod COMPUTE template for WAN 2.2 with CUDA 12.8, PyTorch nightly, ComfyUI v0.3.56, and JupyterLab. ComfyUI on port 8188, JupyterLab on port 8189."
+LABEL cuda.version="12.8.1"
+LABEL pytorch.version="nightly"
+LABEL comfyui.version="v0.3.56"
+LABEL wan.version="2.2"
+LABEL template.type="compute"
+LABEL ports.comfyui="8188"
+LABEL ports.jupyterlab="8189"
+
