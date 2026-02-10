@@ -141,7 +141,7 @@ echo ""\n\
 # gpu-only  = everything on GPU, never offload to CPU\n\
 # normalvram = ComfyUI default auto-detection\n\
 # lowvram   = offload layers to CPU (slow, for small GPUs)\n\
-: "${COMFY_VRAM_MODE:=highvram}"\n\
+: "${COMFY_VRAM_MODE:=normalvram}"\n\
 \n\
 VRAM_FLAG=""\n\
 case "$COMFY_VRAM_MODE" in\n\
