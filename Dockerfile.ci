@@ -136,11 +136,29 @@ echo ""\n\
 # Allow operators to tweak verbosity; default is DEBUG\n\
 : "${COMFY_LOG_LEVEL:=DEBUG}"\n\
 \n\
+# VRAM management mode (set via RunPod env var COMFY_VRAM_MODE)\n\
+# highvram  = keep all models in VRAM (fastest, needs enough VRAM)\n\
+# gpu-only  = everything on GPU, never offload to CPU\n\
+# normalvram = ComfyUI default auto-detection\n\
+# lowvram   = offload layers to CPU (slow, for small GPUs)\n\
+: "${COMFY_VRAM_MODE:=highvram}"\n\
+\n\
+VRAM_FLAG=""\n\
+case "$COMFY_VRAM_MODE" in\n\
+    highvram)  VRAM_FLAG="--highvram" ;;\n\
+    gpu-only)  VRAM_FLAG="--gpu-only" ;;\n\
+    lowvram)   VRAM_FLAG="--lowvram" ;;\n\
+    novram)    VRAM_FLAG="--novram" ;;\n\
+    normal*)   VRAM_FLAG="" ;;\n\
+    *)         VRAM_FLAG="--highvram" ;;\n\
+esac\n\
+\n\
 echo "╔═══════════════════════════════════════════════════════════════════╗"\n\
 echo "║  🎨 COMFYUI STARTING (Port 8188) + SageAttention                  ║"\n\
 echo "╚═══════════════════════════════════════════════════════════════════╝"\n\
 echo "   ⚡ SageAttention: ENABLED"\n\
 echo "   📊 Log Level: ${COMFY_LOG_LEVEL}"\n\
+echo "   🎮 VRAM Mode: ${COMFY_VRAM_MODE} ${VRAM_FLAG}"\n\
 echo ""\n\
 \n\
 # Start ComfyUI\n\
@@ -151,7 +169,8 @@ python -u /comfyui/main.py \\\n\
     --port 8188 \\\n\
     --verbose "${COMFY_LOG_LEVEL}" \\\n\
     --log-stdout \\\n\
-    --use-sage-attention\n' > /start.sh
+    --use-sage-attention \\\n\
+    $VRAM_FLAG\n' > /start.sh
 
 RUN chmod +x /start.sh
 
