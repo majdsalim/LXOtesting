@@ -19,7 +19,7 @@
 
 | Model | Download URL | Target Path | Size | Date | Notes |
 |---|---|---|---|---|---|
-| *(none yet — base WAN repo models are pre-installed or downloaded via download_models.sh)* | | | | | |
+| Qwen Image VAE | https://huggingface.co/Comfy-Org/Qwen-Image_ComfyUI/resolve/main/split_files/vae/qwen_image_vae.safetensors | /models/vae/ | TBD | 2026-02-10 | VAE for Qwen Image model |
 
 ## Pip Packages Installed
 
