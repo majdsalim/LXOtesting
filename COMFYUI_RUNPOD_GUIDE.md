@@ -146,12 +146,14 @@ Keep the pod running while developing. No network volume needed — data lives i
 - [x] Set up CI/CD (GitHub Actions) → `.github/workflows/docker-build.yml`
 - [x] Fix Dockerfile.ci: use latest ComfyUI, no model auto-downloads
 - [x] Push to GitHub → CI/CD builds Docker image → `ghcr.io/majdsalim/lxotesting:latest`
-- [ ] Create RunPod pod template `LXOtemp` using YOUR image
-- [ ] Deploy compute pod (no network volume — keep pod running, pause/start to persist)
-- [ ] Install YOUR models and custom nodes (not the WAN defaults)
-- [ ] Build and test YOUR ComfyUI workflows in the browser UI
-- [ ] **Maintain SETUP_LOG.md** — log every model, node, and package installed
-- [ ] Export finalized workflows via "Save (API Format)" in ComfyUI
+- [x] Create RunPod pod template `LXOtemp` using own image (GHCR credentials required — private repo)
+- [x] Deploy compute pod — verified working (2026-02-10)
+- [x] Install YOUR models and custom nodes (not the WAN defaults) — ComfyUI-Sharp, GaussianViewer, Qwen Image Edit FP8, SHARP, LoRAs (2026-02-10)
+- [x] Build and test YOUR ComfyUI workflows in the browser UI — 3 Gaussian Splatting workflows (2026-02-10)
+- [x] **Maintain SETUP_LOG.md** — log every model, node, and package installed (2026-02-10)
+- [x] Export finalized workflows via "Save (API Format)" in ComfyUI — 3 workflows exported (2026-02-10)
+- [x] Translate SETUP_LOG.md into runtime scripts — nodes added to runtime-init.sh, models added to download_models.sh (DOWNLOAD_GAUSSIAN flag) (2026-02-10)
+- [ ] Rebuild image, deploy fresh pod, verify everything auto-installs correctly
 - [ ] Test workflows work via API (curl to the compute pod's URL)
 
 **Compute pod template `LXOtemp` settings:**
@@ -160,6 +162,7 @@ Keep the pod running while developing. No network volume needed — data lives i
 - Volume disk: 0 GB
 - HTTP Ports: `8188, 8189`
 - Start Command: *(use default — no custom start command needed)*
+- Docker credentials: Required (private GHCR image — use GitHub username + PAT with `read:packages`)
 - Environment Variables:
   - `COMFYUI_USE_LATEST=true` (install latest ComfyUI at boot)
   - `DOWNLOAD_ALL=false` (no auto model downloads — you install your own)
@@ -167,10 +170,21 @@ Keep the pod running while developing. No network volume needed — data lives i
 
 > **NOTE on compute pod without network volume:** You CAN pause/resume the pod.
 > Data persists as long as you don't terminate. The pod ID stays the same across pause/start.
-> First boot: ~15-20 min (installs ComfyUI, PyTorch, nodes, SageAttention).
+> First boot: ~5 min (verified 2026-02-10 — installs ComfyUI, PyTorch, nodes, SageAttention).
 > Subsequent boots (pause/start): ~2-5 min (skips install if `.initialized` exists).
 > ComfyUI: `https://<pod-id>-8188.proxy.runpod.net`
 > JupyterLab: `https://<pod-id>-8189.proxy.runpod.net`
+
+**Verified boot info (2026-02-10):**
+- ComfyUI v0.12.3 (latest at time of deploy)
+- ComfyUI-Manager V3.39.2
+- PyTorch 2.10.0+cu128
+- SageAttention 2.2.0 (prebuilt wheel for RTX 4090)
+- GPU: NVIDIA GeForce RTX 4090, 22564 MB VRAM
+- Boot time: ~5 minutes (from container start to ComfyUI ready)
+- 18 custom nodes loaded, all functioning
+- JupyterLab running on port 8189
+- No model downloads (DOWNLOAD_ALL=false working correctly)
 
 ### Phase 2: Dockerize for Serverless
 Once workflows are stable and tested:
@@ -193,18 +207,19 @@ Once workflows are stable and tested:
 
 ---
 
-## 5. What the Repo Already Has
-
-Everything needed for serverless is already in the repo:
+## 5. What the Repo Has
 
 | File | Purpose | Status |
 |---|---|---|
-| `Dockerfile.wan22` | Builds the Docker image (currently compute mode) | **Needs modification** for serverless |
-| `runpod-worker-comfyui/handler.py` | Receives RunPod jobs, sends to ComfyUI, returns results | **Ready** — no changes needed |
-| `runpod-worker-comfyui/src/start.sh` | Serverless start script (ComfyUI background + handler) | **Ready** — this is what we need |
-| `scripts/runtime-init.sh` | Installs SageAttention, verifies nodes at runtime | **Ready** — no changes needed |
-| `scripts/download_models.sh` | Downloads models (supports network volume paths) | **Ready** — already handles /workspace |
+| `Dockerfile.ci` | CI-optimized Dockerfile (lightweight, runtime-installed) | **Active** — used by CI/CD, builds current image |
+| `Dockerfile.wan22` | Full Dockerfile (bakes PyTorch + nodes into image) | **Available** — not used by CI, alternative for serverless |
+| `.github/workflows/docker-build.yml` | CI/CD: auto-builds image on push to main | **Active** — working |
+| `runpod-worker-comfyui/handler.py` | Receives RunPod jobs, sends to ComfyUI, returns results | **Ready** — no changes needed for serverless |
+| `runpod-worker-comfyui/src/start.sh` | Serverless start script (ComfyUI background + handler) | **Ready** — will be used in Phase 2 |
+| `scripts/runtime-init.sh` | Installs ComfyUI, PyTorch, nodes, SageAttention at runtime | **Active** — defaults to COMFYUI_USE_LATEST=true |
+| `scripts/download_models.sh` | Downloads models (flag-based, supports /workspace) | **Active** — defaults to DOWNLOAD_ALL=false |
 | `runpod-worker-comfyui/src/extra_model_paths.yaml` | Tells ComfyUI to also look for models in /runpod-volume | **Ready** — useful for network volume |
+| `SETUP_LOG.md` | Tracks all changes made on compute pod for Dockerization | **Active** — update as you install things |
 
 ---
 
@@ -288,43 +303,36 @@ When your model set stabilizes, you can switch to Option B by baking them into t
 - Forked to https://github.com/majdsalim/LXOtesting (private)
 - Cloned to `c:\Users\majds\OneDrive\Desktop\Liquidox`
 
-### Step 2: Modify the Dockerfile for Serverless
-1. Change the start.sh creation in `Dockerfile.wan22` to use serverless mode (see Section 6)
-2. Optionally remove JupyterLab stage to reduce image size
-3. Update labels from "compute" to "serverless"
+### Step 2: Set Up CI/CD ✅ DONE
+- Created `.github/workflows/docker-build.yml`
+- Builds `Dockerfile.ci` on push to main, pushes to GHCR
+- Image: `ghcr.io/majdsalim/lxotesting:latest`
 
-### Step 3: Set Up CI/CD (GitHub Actions)
-1. Create `.github/workflows/docker-build.yml` in the repo
-2. Configure it to build `Dockerfile.wan22` and push to GHCR
-3. Set up `GITHUB_TOKEN` permissions for GHCR push
-4. Push to `main` branch → image builds automatically
-5. Image will be available at: `ghcr.io/majdsalim/lxotesting:latest`
+### Step 3: Fix Image for Own Use ✅ DONE
+- `Dockerfile.ci`: removed pinned ComfyUI v0.3.56, updated labels
+- `runtime-init.sh`: default `COMFYUI_USE_LATEST=true`
+- `download_models.sh`: default `DOWNLOAD_ALL=false`
+- Build scripts: updated to `majdsalim/lxotesting`
 
-### Step 4: Create a Network Volume (Optional but Recommended)
-1. Go to [RunPod Console → Storage](https://www.runpod.io/console/user/storage)
-2. Create a network volume (50-100 GB)
-3. Choose region based on **GPU availability and price** (not team location — latency is irrelevant)
-4. Note: the `download_models.sh` script auto-downloads models to the volume on first cold start
+### Step 4: Deploy Compute Pod ✅ DONE
+- Template `LXOtemp` created with own image + GHCR credentials
+- Pod deployed, verified boot, ComfyUI v0.12.3 running on RTX 4090
+- ~5 min boot time
 
-### Step 5: Create Serverless Endpoint on RunPod
-1. Go to [RunPod Console → Serverless](https://www.runpod.io/console/serverless)
-2. Click "New Endpoint"
-3. Configure:
-   - **Name:** `comfyui-wan22-dev`
-   - **Docker Image:** `ghcr.io/majdsalim/lxotesting:latest`
-   - **GPU:** Select appropriate GPU type
-   - **Workers:**
-     - Min Workers: 0 (scale to zero when idle — saves cost)
-     - Max Workers: 1 (for development, increase for production)
-   - **Idle Timeout:** 60 seconds (keep worker warm for 60s after last request)
-   - **Network Volume:** Attach the one from Step 4 (optional)
-   - **Environment Variables:**
-     - `COMFY_LOG_LEVEL=DEBUG`
-     - `DOWNLOAD_ALL=false` (then enable only the model flags you need)
-     - `DOWNLOAD_WAN_CORE=true` (or whichever models you need)
-4. Note the **Endpoint ID** — this is part of your API URL
+### Step 5: Develop Workflows on Compute Pod (NOW — Phase 1)
+- Use the compute pod's ComfyUI browser UI to build and test workflows
+- Install YOUR models and custom nodes (the WAN defaults are just a base — you'll add your own)
+- **Log every change in SETUP_LOG.md** — this becomes the Dockerfile when you're ready for serverless
+- Export finalized workflows via "Save (API Format)" in ComfyUI
+- The exported JSON is what you send as the `workflow` field in the API request
 
-### Step 6: Test the API
+### Step 6: Dockerize for Serverless (Phase 2 — Later)
+- Translate SETUP_LOG.md into Dockerfile instructions
+- Create serverless start.sh (ComfyUI background + handler.py foreground)
+- Create Serverless Endpoint on RunPod
+- Test with API requests
+
+### Step 7: Test the Serverless API (Phase 2 — Later)
 
 ```bash
 # Check endpoint status
@@ -349,13 +357,6 @@ curl -X POST \
   -d '{"input": {"workflow": YOUR_WORKFLOW_JSON}}' \
   https://api.runpod.ai/v2/YOUR_ENDPOINT_ID/runsync
 ```
-
-### Step 7: Develop Workflows on Compute Pod (Phase 1 — Do This First)
-- Use the compute pod's ComfyUI browser UI to build and test workflows
-- Install YOUR models and custom nodes (the WAN defaults are just a base — you'll add your own)
-- **Log every change in SETUP_LOG.md** — this becomes the Dockerfile when you're ready for serverless
-- Export finalized workflows via "Save (API Format)" in ComfyUI
-- The exported JSON is what you send as the `workflow` field in the API request
 
 ---
 
@@ -485,13 +486,28 @@ Expected cold start: **3-10 minutes** depending on:
 - Bake models into Docker image to eliminate download time
 - Use `FlashAttention` instead of SageAttention to skip compilation (if your GPU supports it)
 
-### BLOCKER: The Dockerfile Needs Modification
-The current Dockerfile is for compute mode. The start.sh must be changed to serverless mode.
-This is the first task before anything else can work. (See Section 6)
+### ~~BLOCKER: The Dockerfile Needs Modification~~ — RESOLVED 2026-02-10
+Using `Dockerfile.ci` (lightweight, runtime-installed). Compute mode start.sh is generated
+at build time. Serverless mode will need a separate Dockerfile or start.sh swap in Phase 2.
 
-### BLOCKER: CI/CD Not Set Up on the Fork
-The original repo's GitHub Actions workflow wasn't included in the fork.
-We need to create `.github/workflows/docker-build.yml` to automate image builds.
+### ~~BLOCKER: CI/CD Not Set Up on the Fork~~ — RESOLVED 2026-02-10
+Created `.github/workflows/docker-build.yml`. Auto-builds `Dockerfile.ci` on push to main.
+Image at `ghcr.io/majdsalim/lxotesting:latest`. Uses `secrets.GITHUB_TOKEN` for GHCR auth.
+
+### GOTCHA: GHCR Image Is Private
+Since the repo is private, the Docker image on GHCR is also private by default.
+RunPod requires Docker credentials (GitHub username + PAT with `read:packages` scope) in the
+pod template to pull the image. Alternative: make the GHCR package public (repo stays private)
+via GitHub Packages settings.
+
+### NOTE: Minor Warnings in Boot Log (Non-Blocking)
+These were observed on first successful boot (2026-02-10) and are safe to ignore:
+- `WARNING: You need pytorch with cu130 or higher to use optimized CUDA operations` — ComfyUI's
+  new `comfy_kitchen` CUDA backend wants cu130+. Falls back to `eager` backend. Works fine.
+- `FantasyPortrait nodes not available: No module named 'onnx'` — fix with `pip install onnx` if needed.
+- `Cannot import 'guidedFilter' from 'cv2.ximgproc'` — LayerStyle nodes need `opencv-contrib-python`.
+- `ComfyUI-Manager security level raised from 'weak' to 'normal'` — auto-corrected, fine for compute.
+- Several DEPRECATION warnings for legacy JS APIs in custom nodes — cosmetic, everything works.
 
 ### GOTCHA: Async vs. Sync API
 - `/run` — Returns immediately with job ID. You must poll `/status/<job_id>` to get results.
@@ -631,6 +647,8 @@ This file should live in the repo alongside the Dockerfile.
 | 2026-02-10 | Use Dockerfile.ci for CI/CD builds | Lightweight image (~5-8 GB), fast CI builds. PyTorch/nodes/SageAttention installed at runtime. |
 | 2026-02-10 | Default COMFYUI_USE_LATEST=true | Always install latest ComfyUI. Avoids version pinning issues with ComfyUI-Manager. |
 | 2026-02-10 | Default DOWNLOAD_ALL=false | No models auto-download. User installs only what they need during development. |
+| 2026-02-10 | GHCR image is private, credentials in template | Repo is private → GHCR package is private. PAT with read:packages required in RunPod template. Can make package public later. |
+| 2026-02-10 | Pod deployed and verified | ComfyUI v0.12.3, PyTorch 2.10.0+cu128, SageAttention 2.2.0, RTX 4090. ~5 min boot. All systems working. |
 
 ---
 
@@ -666,22 +684,32 @@ curl -X POST \
 
 **You are in Phase 1: Workflow Development on Compute Pod.**
 
-**CI/CD is set up. Your image is: `ghcr.io/majdsalim/lxotesting:latest`**
+**Pod is deployed and running. ComfyUI and JupyterLab are accessible.**
 
-1. **Wait for the GitHub Actions build** to complete (check Actions tab on the repo)
-2. **Create a RunPod pod template** `LXOtemp` using `ghcr.io/majdsalim/lxotesting:latest`
-   - Container disk: 50 GB, HTTP Ports: `8188,8189`
-   - Env vars: `COMFYUI_USE_LATEST=true`, `DOWNLOAD_ALL=false`, `COMFY_LOG_LEVEL=DEBUG`
-3. **Deploy a compute pod** (no network volume needed — use pause/start to persist data)
-4. **Wait for first boot** (~15-20 min — installs everything from scratch)
-5. **Access ComfyUI** at `https://<pod-id>-8188.proxy.runpod.net`
-6. **Install YOUR models and custom nodes** — your own pipeline needs
-7. **Build and test YOUR workflows** in the ComfyUI browser UI
-8. **Log every change** — tell the Cursor agent what you installed so it updates SETUP_LOG.md
-9. **Export workflows** via "Save (API Format)" when they're working
-10. **Test API calls** to the compute pod (curl to `<pod-url>/prompt`) to verify the API format works
+**Status as of 2026-02-10:**
+- CI/CD: Working. Image: `ghcr.io/majdsalim/lxotesting:latest`
+- Pod: Deployed with `LXOtemp` template, verified boot, ComfyUI v0.12.3 running
+- Models: None installed yet (DOWNLOAD_ALL=false). Ready for user's own models.
+- Workflows: None built yet. This is the next step.
+
+**Immediate next steps:**
+
+1. **Access ComfyUI** at `https://<pod-id>-8188.proxy.runpod.net`
+2. **Install YOUR models** — download the models you need for your pipeline
+   - Use ComfyUI-Manager, JupyterLab terminal, or `wget`/`huggingface-cli` in the web terminal
+   - Models go in `/comfyui/models/` (subdirs: `checkpoints/`, `loras/`, `clip/`, `vae/`, etc.)
+3. **Install any additional custom nodes** you need via ComfyUI-Manager
+4. **Build and test YOUR workflows** in the ComfyUI browser UI
+5. **Log every change** — tell the Cursor agent what you installed so it updates SETUP_LOG.md
+6. **Export workflows** via "Save (API Format)" when they're working
+7. **Test API calls** to the compute pod (curl to `<pod-url>/prompt`) to verify the API format works
 
 **When workflows are stable → move to Phase 2 (Dockerize for Serverless).**
+
+**Important reminders:**
+- **Don't terminate the pod** — only pause/start. Terminating deletes all data.
+- **Log everything in SETUP_LOG.md** as you go. If the pod dies, this is your recovery recipe.
+- **Every push to the repo** triggers a CI/CD rebuild of the Docker image (but doesn't affect the running pod).
 
 ### Key Files in This Repo
 

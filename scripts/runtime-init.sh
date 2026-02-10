@@ -343,6 +343,22 @@ if [ ! -d "ComfyUI-Wan-VACE-Prep" ]; then
 fi
 
 # ============================================================================
+# Gaussian Splatting Nodes (user's custom pipeline)
+# ============================================================================
+
+# Install ComfyUI-Sharp (Apple SHARP - monocular 3D Gaussian Splatting)
+if [ ! -d "ComfyUI-Sharp" ]; then
+    echo "Installing ComfyUI-Sharp..."
+    git clone https://github.com/PozzettiAndrea/ComfyUI-Sharp.git
+fi
+
+# Install comfyui-GaussianViewer (interactive Gaussian Splatting PLY viewer/renderer)
+if [ ! -d "comfyui-GaussianViewer" ]; then
+    echo "Installing comfyui-GaussianViewer..."
+    git clone https://github.com/CarlMarkswx/comfyui-GaussianViewer.git
+fi
+
+# ============================================================================
 # FLUX Custom Nodes - Only installed when DOWNLOAD_FLUX=true
 # ============================================================================
 if [ "$DOWNLOAD_FLUX" = "true" ]; then
@@ -483,6 +499,18 @@ fi
 if [ -f "ComfyUI-basic_data_handling/requirements.txt" ]; then
     echo "  → ComfyUI-basic_data_handling..."
     uv pip install --no-cache -r ComfyUI-basic_data_handling/requirements.txt
+fi
+
+# ComfyUI-Sharp dependencies (Gaussian Splatting)
+if [ -f "ComfyUI-Sharp/requirements.txt" ]; then
+    echo "  → ComfyUI-Sharp..."
+    uv pip install --no-cache -r ComfyUI-Sharp/requirements.txt
+fi
+
+# comfyui-GaussianViewer dependencies (Gaussian Splatting viewer)
+if [ -f "comfyui-GaussianViewer/requirements.txt" ]; then
+    echo "  → comfyui-GaussianViewer..."
+    uv pip install --no-cache -r comfyui-GaussianViewer/requirements.txt
 fi
 
 # ComfyUI core audio dependencies (for nodes_audio.py, nodes_lt_audio.py, nodes_audio_encoder.py)

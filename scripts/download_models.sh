@@ -24,6 +24,7 @@ echo "========================================="
 # DOWNLOAD_DETECTION=true    - Detection model (~40MB)
 # DOWNLOAD_UPSCALE=true      - Upscale models (~5GB)
 # DOWNLOAD_MATANYONE=true    - MatAnyone video matting (~1.5GB)
+# DOWNLOAD_GAUSSIAN=true     - Gaussian Splatting pipeline: Qwen Image Edit, SHARP, LoRAs (~30GB)
 #
 # DOWNLOAD_ALL=true          - Master switch (default: true = download everything)
 #                              Set to "false" then enable individual flags
@@ -49,6 +50,7 @@ echo "========================================="
 : "${DOWNLOAD_DETECTION:=$DOWNLOAD_ALL}"
 : "${DOWNLOAD_UPSCALE:=$DOWNLOAD_ALL}"
 : "${DOWNLOAD_MATANYONE:=$DOWNLOAD_ALL}"
+: "${DOWNLOAD_GAUSSIAN:=$DOWNLOAD_ALL}"
 
 # BUNDLE LOGIC: WAN_CORE includes essential dependencies
 # If WAN_CORE is enabled, also enable CLIP, VAE, LoRAs, and Upscale models (required for T2V workflows)
@@ -85,6 +87,7 @@ echo "   DOWNLOAD_CONTROLNET=$DOWNLOAD_CONTROLNET   (ControlNet ~2GB)"
 echo "   DOWNLOAD_DETECTION=$DOWNLOAD_DETECTION    (Detection ~40MB)"
 echo "   DOWNLOAD_UPSCALE=$DOWNLOAD_UPSCALE      (Upscale ~5GB)"
 echo "   DOWNLOAD_MATANYONE=$DOWNLOAD_MATANYONE    (MatAnyone ~1.5GB)"
+echo "   DOWNLOAD_GAUSSIAN=$DOWNLOAD_GAUSSIAN    (Gaussian Splatting ~30GB)"
 echo ""
 
 # Create ALL ComfyUI model directories for maximum compatibility
@@ -119,7 +122,8 @@ mkdir -p \
     "$MODEL_DIR/instantid" \
     "$MODEL_DIR/text_encoders" \
     "$MODEL_DIR/diffusion_models" \
-    "$MODEL_DIR/detection"
+    "$MODEL_DIR/detection" \
+    "$MODEL_DIR/sharp"
 
 # Symlink to ComfyUI models directory if using /workspace
 if [ "$MODEL_DIR" != "/comfyui/models" ]; then
@@ -588,6 +592,24 @@ if [ "$DOWNLOAD_FLUX" = "true" ]; then
         "https://huggingface.co/yo9otatara/model/resolve/main/Flux_Skin_Detailer.safetensors $MODEL_DIR/loras/Flux_Skin_Detailer.safetensors"
 else
     echo "   ⏭️  FLUX.1-dev models SKIPPED (DOWNLOAD_FLUX=false)"
+fi
+
+# Phase 10: Gaussian Splatting Pipeline (Qwen Image Edit + SHARP)
+echo "╔═══════════════════════════════════════════════════════════════════════╗"
+echo "║  PHASE 10: Gaussian Splatting Pipeline (Qwen + SHARP)                 ║"
+echo "╚═══════════════════════════════════════════════════════════════════════╝"
+
+if [ "$DOWNLOAD_GAUSSIAN" = "true" ]; then
+    echo "   ✅ Gaussian Splatting models enabled"
+    download_parallel \
+        "https://huggingface.co/Comfy-Org/Qwen-Image_ComfyUI/resolve/main/split_files/vae/qwen_image_vae.safetensors $MODEL_DIR/vae/qwen_image_vae.safetensors" \
+        "https://huggingface.co/1038lab/Qwen-Image-Edit-2511-FP8/resolve/main/Qwen-Image-Edit-2511-FP8_e4m3fn.safetensors $MODEL_DIR/diffusion_models/Qwen-Image-Edit-2511-FP8_e4m3fn.safetensors" \
+        "https://huggingface.co/Comfy-Org/Qwen-Image_ComfyUI/resolve/main/split_files/text_encoders/qwen_2.5_vl_7b_fp8_scaled.safetensors $MODEL_DIR/text_encoders/qwen_2.5_vl_7b_fp8_scaled.safetensors" \
+        "https://huggingface.co/dx8152/Qwen-Image-Edit-2511-Gaussian-Splash/resolve/main/%E9%AB%98%E6%96%AF%E6%B3%BC%E6%BA%85-Sharp.safetensors $MODEL_DIR/loras/%E9%AB%98%E6%96%AF%E6%B3%BC%E6%BA%85-Sharp.safetensors" \
+        "https://huggingface.co/lightx2v/Qwen-Image-Edit-2511-Lightning/resolve/main/Qwen-Image-Edit-2511-Lightning-8steps-V1.0-fp32.safetensors $MODEL_DIR/loras/Qwen-Image-Edit-2511-Lightning-8steps-V1.0-fp32.safetensors" \
+        "https://huggingface.co/apple/Sharp/resolve/main/sharp_2572gikvuh.pt $MODEL_DIR/sharp/sharp_2572gikvuh.pt"
+else
+    echo "   ⏭️  Gaussian Splatting models SKIPPED (DOWNLOAD_GAUSSIAN=false)"
 fi
 
 # Final summary
