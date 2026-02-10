@@ -601,13 +601,51 @@ echo "╚═══════════════════════�
 
 if [ "$DOWNLOAD_GAUSSIAN" = "true" ]; then
     echo "   ✅ Gaussian Splatting models enabled"
+
+    # Download 5 models in parallel (ASCII filenames — no issues)
     download_parallel \
         "https://huggingface.co/Comfy-Org/Qwen-Image_ComfyUI/resolve/main/split_files/vae/qwen_image_vae.safetensors $MODEL_DIR/vae/qwen_image_vae.safetensors" \
         "https://huggingface.co/1038lab/Qwen-Image-Edit-2511-FP8/resolve/main/Qwen-Image-Edit-2511-FP8_e4m3fn.safetensors $MODEL_DIR/diffusion_models/Qwen-Image-Edit-2511-FP8_e4m3fn.safetensors" \
         "https://huggingface.co/Comfy-Org/Qwen-Image_ComfyUI/resolve/main/split_files/text_encoders/qwen_2.5_vl_7b_fp8_scaled.safetensors $MODEL_DIR/text_encoders/qwen_2.5_vl_7b_fp8_scaled.safetensors" \
-        "https://huggingface.co/dx8152/Qwen-Image-Edit-2511-Gaussian-Splash/resolve/main/%E9%AB%98%E6%96%AF%E6%B3%BC%E6%BA%85-Sharp.safetensors $MODEL_DIR/loras/%E9%AB%98%E6%96%AF%E6%B3%BC%E6%BA%85-Sharp.safetensors" \
         "https://huggingface.co/lightx2v/Qwen-Image-Edit-2511-Lightning/resolve/main/Qwen-Image-Edit-2511-Lightning-8steps-V1.0-fp32.safetensors $MODEL_DIR/loras/Qwen-Image-Edit-2511-Lightning-8steps-V1.0-fp32.safetensors" \
         "https://huggingface.co/apple/Sharp/resolve/main/sharp_2572gikvuh.pt $MODEL_DIR/sharp/sharp_2572gikvuh.pt"
+
+    # Special handling: Gaussian Splash (Sharp) LoRA has Chinese characters in filename
+    # (高斯泼溅-Sharp.safetensors) — URL-encoded chars cause 401 on HuggingFace CDN redirect.
+    # Use huggingface-cli which handles non-ASCII filenames properly.
+    GAUSSIAN_LORA_TARGET="$MODEL_DIR/loras/高斯泼溅-Sharp.safetensors"
+    if [ -f "$GAUSSIAN_LORA_TARGET" ]; then
+        echo "   ✅ 高斯泼溅-Sharp.safetensors already exists, skipping..."
+    else
+        echo "   📥 Downloading 高斯泼溅-Sharp.safetensors (Gaussian Splash LoRA)..."
+        echo "      Using huggingface-cli (handles Chinese filename correctly)"
+        GAUSSIAN_TMP=$(mktemp -d)
+        if huggingface-cli download \
+            dx8152/Qwen-Image-Edit-2511-Gaussian-Splash \
+            "高斯泼溅-Sharp.safetensors" \
+            --local-dir "$GAUSSIAN_TMP" \
+            --local-dir-use-symlinks False 2>&1; then
+
+            if [ -f "$GAUSSIAN_TMP/高斯泼溅-Sharp.safetensors" ]; then
+                mv "$GAUSSIAN_TMP/高斯泼溅-Sharp.safetensors" "$GAUSSIAN_LORA_TARGET"
+                echo "   ✅ 高斯泼溅-Sharp.safetensors downloaded successfully"
+            else
+                echo "   ❌ 高斯泼溅-Sharp.safetensors not found after download"
+            fi
+        else
+            # Fallback: use curl -L which handles redirects better than wget for encoded URLs
+            echo "   ⚠️  huggingface-cli failed, trying curl..."
+            curl -L -o "$GAUSSIAN_LORA_TARGET" \
+                "https://huggingface.co/dx8152/Qwen-Image-Edit-2511-Gaussian-Splash/resolve/main/%E9%AB%98%E6%96%AF%E6%B3%BC%E6%BA%85-Sharp.safetensors"
+            if [ -f "$GAUSSIAN_LORA_TARGET" ] && [ -s "$GAUSSIAN_LORA_TARGET" ]; then
+                echo "   ✅ 高斯泼溅-Sharp.safetensors downloaded via curl"
+            else
+                echo "   ❌ 高斯泼溅-Sharp.safetensors download failed"
+                rm -f "$GAUSSIAN_LORA_TARGET"
+            fi
+        fi
+        rm -rf "$GAUSSIAN_TMP"
+    fi
 else
     echo "   ⏭️  Gaussian Splatting models SKIPPED (DOWNLOAD_GAUSSIAN=false)"
 fi
