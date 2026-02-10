@@ -1,7 +1,7 @@
-# WAN 2.2 RunPod Template - CI-Optimized Dockerfile
-# Lightweight build for GitHub Actions - PyTorch installed at runtime
-# Author: AI IDE Agent
-# Date: 2025-10-11
+# LXO RunPod Template - CI-Optimized Dockerfile
+# Lightweight build for GitHub Actions - PyTorch, ComfyUI, and nodes installed at runtime
+# Based on: lum3on/wan2.2_runpod-temp
+# Repo: majdsalim/LXOtesting
 
 # ============================================================================
 # Stage 1: Base image with CUDA 12.8.1 (NO PyTorch - installed at runtime)
@@ -10,7 +10,8 @@
 FROM nvidia/cuda:12.8.1-cudnn-devel-ubuntu24.04 AS base
 
 # Build arguments
-ARG COMFYUI_VERSION=v0.3.56
+# ComfyUI version is handled at runtime by runtime-init.sh
+# Set COMFYUI_USE_LATEST=true (default) for latest, or false + COMFYUI_VERSION for pinned
 
 # Environment variables
 ENV DEBIAN_FRONTEND=noninteractive
@@ -163,12 +164,11 @@ EXPOSE 8188 8189
 CMD ["/start.sh"]
 
 # Labels
-LABEL maintainer="WAN 2.2 RunPod CI-Optimized Template"
-LABEL description="RunPod template for WAN 2.2 with runtime PyTorch installation. ComfyUI on port 8188, JupyterLab on port 8189."
+LABEL maintainer="majdsalim/LXOtesting"
+LABEL description="LXO RunPod compute template. ComfyUI (latest) on port 8188, JupyterLab on port 8189. Runtime-installed PyTorch, nodes, and SageAttention."
 LABEL cuda.version="12.8.1"
 LABEL pytorch.version="runtime-install"
-LABEL comfyui.version="v0.3.55"
-LABEL wan.version="2.2"
+LABEL comfyui.version="latest (runtime)"
 LABEL template.type="ci-optimized"
 LABEL ports.comfyui="8188"
 LABEL ports.jupyterlab="8189"

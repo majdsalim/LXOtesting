@@ -29,9 +29,9 @@ echo "========================================="
 #                              Set to "false" then enable individual flags
 # ============================================================================
 
-# DOWNLOAD_ALL defaults to true (downloads everything)
-# If DOWNLOAD_ALL=false, only explicitly enabled flags will download
-: "${DOWNLOAD_ALL:=true}"
+# DOWNLOAD_ALL defaults to false (nothing downloads unless explicitly enabled)
+# Set DOWNLOAD_ALL=true to download everything, or enable individual flags
+: "${DOWNLOAD_ALL:=false}"
 
 # Individual flags: default to DOWNLOAD_ALL value
 # This way: DOWNLOAD_ALL=false means nothing downloads unless explicitly set

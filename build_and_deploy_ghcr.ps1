@@ -2,10 +2,10 @@
 # This script helps you build and deploy the Docker image to GHCR on Windows
 
 # Configuration
-$IMAGE_NAME = "wan22-runpod"
+$IMAGE_NAME = "lxotesting"
 $DEFAULT_TAG = "latest"
-$DOCKERFILE = "Dockerfile.wan22"
-$GITHUB_USER = "lum3on"
+$DOCKERFILE = "Dockerfile.ci"
+$GITHUB_USER = "majdsalim"
 $REGISTRY = "ghcr.io"
 
 # Functions

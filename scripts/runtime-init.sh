@@ -12,10 +12,10 @@ echo "==================================================================="
 # ============================================================================
 # COMFYUI VERSION FLAG - Set in RunPod Environment Variables
 # ============================================================================
-# COMFYUI_USE_LATEST=true   - Install latest ComfyUI version (bleeding edge)
-# COMFYUI_USE_LATEST=false  - Use pinned stable version v0.3.56 (default)
+# COMFYUI_USE_LATEST=true   - Install latest ComfyUI version (default)
+# COMFYUI_USE_LATEST=false  - Use pinned stable version (set COMFYUI_VERSION)
 # ============================================================================
-: "${COMFYUI_USE_LATEST:=false}"
+: "${COMFYUI_USE_LATEST:=true}"
 
 # Check if already initialized (for persistent storage)
 ALREADY_INITIALIZED=false
