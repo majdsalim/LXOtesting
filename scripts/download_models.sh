@@ -607,7 +607,7 @@ if [ "$DOWNLOAD_GAUSSIAN" = "true" ]; then
         "https://huggingface.co/Comfy-Org/Qwen-Image_ComfyUI/resolve/main/split_files/vae/qwen_image_vae.safetensors $MODEL_DIR/vae/qwen_image_vae.safetensors" \
         "https://huggingface.co/1038lab/Qwen-Image-Edit-2511-FP8/resolve/main/Qwen-Image-Edit-2511-FP8_e4m3fn.safetensors $MODEL_DIR/diffusion_models/Qwen-Image-Edit-2511-FP8_e4m3fn.safetensors" \
         "https://huggingface.co/Comfy-Org/Qwen-Image_ComfyUI/resolve/main/split_files/text_encoders/qwen_2.5_vl_7b_fp8_scaled.safetensors $MODEL_DIR/text_encoders/qwen_2.5_vl_7b_fp8_scaled.safetensors" \
-        "https://huggingface.co/lightx2v/Qwen-Image-Edit-2511-Lightning/resolve/main/Qwen-Image-Edit-2511-Lightning-8steps-V1.0-fp32.safetensors $MODEL_DIR/loras/Qwen-Image-Edit-2511-Lightning-8steps-V1.0-fp32.safetensors" \
+        "https://huggingface.co/lightx2v/Qwen-Image-Edit-2511-Lightning/resolve/main/Qwen-Image-Edit-2511-Lightning-4steps-V1.0-bf16.safetensors $MODEL_DIR/loras/Qwen-Image-Edit-2511-Lightning-4steps-V1.0-bf16.safetensors" \
         "https://huggingface.co/apple/Sharp/resolve/main/sharp_2572gikvuh.pt $MODEL_DIR/sharp/sharp_2572gikvuh.pt"
 
     # Special handling: Gaussian Splash (Sharp) LoRA has Chinese characters in filename
