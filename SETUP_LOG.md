@@ -20,6 +20,7 @@
 | Model | Download URL | Target Path | Size | Date | Notes |
 |---|---|---|---|---|---|
 | Qwen Image VAE | https://huggingface.co/Comfy-Org/Qwen-Image_ComfyUI/resolve/main/split_files/vae/qwen_image_vae.safetensors | /models/vae/ | TBD | 2026-02-10 | VAE for Qwen Image model |
+| Qwen Image Edit 2511 FP8 | https://huggingface.co/1038lab/Qwen-Image-Edit-2511-FP8/resolve/main/Qwen-Image-Edit-2511-FP8_e4m3fn.safetensors | /models/diffusion_models/ | 20.4 GB | 2026-02-10 | FP8 (e4m3fn) quantized model |
 
 ## Pip Packages Installed
 
