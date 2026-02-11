@@ -492,6 +492,38 @@ def get_image_data(filename, subfolder, image_type):
         return None
 
 
+def _snapshot_output_dir(output_dir="/comfyui/output"):
+    """
+    Take a snapshot of the output directory (set of filenames).
+    Used to detect new files created during workflow execution.
+    """
+    try:
+        if os.path.isdir(output_dir):
+            return set(os.listdir(output_dir))
+    except Exception as e:
+        print(f"worker-comfyui - Warning: Could not snapshot output dir: {e}")
+    return set()
+
+
+def _collect_new_files(before_snapshot, output_dir="/comfyui/output"):
+    """
+    Compare the current output directory to a previous snapshot.
+    Returns a list of (filepath, filename) tuples for new files.
+    """
+    new_files = []
+    try:
+        if os.path.isdir(output_dir):
+            current = set(os.listdir(output_dir))
+            added = current - before_snapshot
+            for fname in sorted(added):
+                fpath = os.path.join(output_dir, fname)
+                if os.path.isfile(fpath):
+                    new_files.append((fpath, fname))
+    except Exception as e:
+        print(f"worker-comfyui - Warning: Could not scan output dir: {e}")
+    return new_files
+
+
 def handler(job):
     """
     Handles a job using ComfyUI via websockets for status and image retrieval.
@@ -540,6 +572,10 @@ def handler(job):
     output_data = []
     file_output_data = []
     errors = []
+
+    # Snapshot the output directory BEFORE execution so we can detect new files
+    output_dir = os.environ.get("COMFY_OUTPUT_DIR", "/comfyui/output")
+    pre_snapshot = _snapshot_output_dir(output_dir)
 
     try:
         # Establish WebSocket connection
@@ -856,6 +892,75 @@ def handler(job):
                         error_msg = f"Failed to fetch file data for {filename} from /view endpoint."
                         print(f"worker-comfyui - {error_msg}")
                         errors.append(error_msg)
+
+        # ── Filesystem fallback: detect files saved to disk but not in history ──
+        # Some custom nodes (e.g. SharpPredict) save output files to the output
+        # directory as a side effect without registering them in ComfyUI's history.
+        # We detect these by comparing the output directory before and after execution.
+        new_files = _collect_new_files(pre_snapshot, output_dir)
+        if new_files:
+            # Filter out files we already captured via history
+            known_filenames = set()
+            for item in output_data:
+                known_filenames.add(item.get("filename", ""))
+            for item in file_output_data:
+                known_filenames.add(item.get("filename", ""))
+
+            for fpath, fname in new_files:
+                if fname in known_filenames:
+                    continue
+
+                print(
+                    f"worker-comfyui - Found new file on disk (not in history): {fname}"
+                )
+                try:
+                    with open(fpath, "rb") as f:
+                        file_bytes = f.read()
+
+                    file_extension = os.path.splitext(fname)[1].lower()
+
+                    if os.environ.get("BUCKET_ENDPOINT_URL"):
+                        try:
+                            with tempfile.NamedTemporaryFile(
+                                suffix=file_extension, delete=False
+                            ) as temp_file:
+                                temp_file.write(file_bytes)
+                                temp_file_path = temp_file.name
+
+                            print(f"worker-comfyui - Uploading {fname} to S3...")
+                            s3_url = rp_upload.upload_image(job_id, temp_file_path)
+                            os.remove(temp_file_path)
+                            print(
+                                f"worker-comfyui - Uploaded {fname} to S3: {s3_url}"
+                            )
+                            file_output_data.append(
+                                {
+                                    "filename": fname,
+                                    "type": "s3_url",
+                                    "data": s3_url,
+                                }
+                            )
+                        except Exception as e:
+                            error_msg = f"Error uploading disk file {fname} to S3: {e}"
+                            print(f"worker-comfyui - {error_msg}")
+                            errors.append(error_msg)
+                    else:
+                        base64_file = base64.b64encode(file_bytes).decode("utf-8")
+                        file_output_data.append(
+                            {
+                                "filename": fname,
+                                "type": "base64",
+                                "data": base64_file,
+                            }
+                        )
+                        print(
+                            f"worker-comfyui - Encoded disk file {fname} as base64 ({len(file_bytes)} bytes)"
+                        )
+
+                except Exception as e:
+                    error_msg = f"Error reading disk file {fname}: {e}"
+                    print(f"worker-comfyui - {error_msg}")
+                    errors.append(error_msg)
 
     except websocket.WebSocketException as e:
         print(f"worker-comfyui - WebSocket Error: {e}")
