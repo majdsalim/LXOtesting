@@ -220,6 +220,25 @@ python -u /comfyui/main.py \\\n\
     --use-sage-attention \\\n\
     $VRAM_FLAG &\n\
 \n\
+# Wait for ComfyUI to be fully ready before starting the handler\n\
+# The handler only retries for 25s which is not enough on cold boot\n\
+echo "Waiting for ComfyUI to become ready on 127.0.0.1:8188..."\n\
+MAX_WAIT=600\n\
+WAITED=0\n\
+while [ $WAITED -lt $MAX_WAIT ]; do\n\
+    if curl -s -o /dev/null -w "%%{http_code}" http://127.0.0.1:8188/ 2>/dev/null | grep -q "200"; then\n\
+        echo "ComfyUI is ready! (waited ${WAITED}s)"\n\
+        break\n\
+    fi\n\
+    sleep 5\n\
+    WAITED=$((WAITED + 5))\n\
+    echo "   ...still waiting (${WAITED}s / ${MAX_WAIT}s)"\n\
+done\n\
+\n\
+if [ $WAITED -ge $MAX_WAIT ]; then\n\
+    echo "ERROR: ComfyUI did not start within ${MAX_WAIT}s. Starting handler anyway."\n\
+fi\n\
+\n\
 echo ""\n\
 echo "╔═══════════════════════════════════════════════════════════════════╗"\n\
 echo "║  RUNPOD HANDLER STARTING                                           ║"\n\
