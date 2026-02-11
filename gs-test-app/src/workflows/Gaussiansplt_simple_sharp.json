@@ -1,0 +1,54 @@
+{
+  "143": {
+    "inputs": {
+      "device": "cuda",
+      "checkpoint_path": ""
+    },
+    "class_type": "LoadSharpModel",
+    "_meta": {
+      "title": "Load SHARP Model"
+    }
+  },
+  "144": {
+    "inputs": {
+      "focal_length_mm": 35,
+      "output_prefix": "sharp",
+      "model": [
+        "143",
+        0
+      ],
+      "image": [
+        "211",
+        0
+      ]
+    },
+    "class_type": "SharpPredict",
+    "_meta": {
+      "title": "SHARP Predict (Image to PLY)"
+    }
+  },
+  "211": {
+    "inputs": {
+      "upscale_method": "lanczos",
+      "megapixels": 1,
+      "resolution_steps": 1,
+      "image": [
+        "213",
+        0
+      ]
+    },
+    "class_type": "ImageScaleToTotalPixels",
+    "_meta": {
+      "title": "ImageScaleToTotalPixels"
+    }
+  },
+  "213": {
+    "inputs": {
+      "image": "shot_1.2_keyframe.jpg"
+    },
+    "class_type": "LoadImage",
+    "_meta": {
+      "title": "to sharp input image"
+    }
+  }
+}

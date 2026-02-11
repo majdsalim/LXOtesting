@@ -538,6 +538,7 @@ def handler(job):
     client_id = str(uuid.uuid4())
     prompt_id = None
     output_data = []
+    file_output_data = []
     errors = []
 
     try:
@@ -755,16 +756,106 @@ def handler(job):
                         error_msg = f"Failed to fetch image data for {filename} from /view endpoint."
                         errors.append(error_msg)
 
-            # Check for other output types
+            # Handle non-image output types (e.g. .ply files from SharpPredict)
             other_keys = [k for k in node_output.keys() if k != "images"]
-            if other_keys:
-                warn_msg = (
-                    f"Node {node_id} produced unhandled output keys: {other_keys}."
-                )
-                print(f"worker-comfyui - WARNING: {warn_msg}")
+            for other_key in other_keys:
+                other_items = node_output[other_key]
+                if not isinstance(other_items, list):
+                    print(
+                        f"worker-comfyui - Node {node_id} key '{other_key}' is not a list, skipping."
+                    )
+                    continue
+
                 print(
-                    f"worker-comfyui - --> If this output is useful, please consider opening an issue on GitHub to discuss adding support."
+                    f"worker-comfyui - Node {node_id} has '{other_key}' with {len(other_items)} item(s)"
                 )
+
+                for file_info in other_items:
+                    # Check if this looks like a file reference
+                    if not isinstance(file_info, dict) or "filename" not in file_info:
+                        print(
+                            f"worker-comfyui - Skipping non-file item in '{other_key}': {file_info}"
+                        )
+                        continue
+
+                    filename = file_info.get("filename")
+                    subfolder = file_info.get("subfolder", "")
+                    file_type = file_info.get("type", "output")
+
+                    # skip temp files
+                    if file_type == "temp":
+                        print(
+                            f"worker-comfyui - Skipping file {filename} because type is 'temp'"
+                        )
+                        continue
+
+                    print(
+                        f"worker-comfyui - Fetching file: {filename} (key='{other_key}', type={file_type})"
+                    )
+                    file_bytes = get_image_data(filename, subfolder, file_type)
+
+                    if file_bytes:
+                        file_extension = os.path.splitext(filename)[1] or ""
+
+                        if os.environ.get("BUCKET_ENDPOINT_URL"):
+                            try:
+                                with tempfile.NamedTemporaryFile(
+                                    suffix=file_extension, delete=False
+                                ) as temp_file:
+                                    temp_file.write(file_bytes)
+                                    temp_file_path = temp_file.name
+
+                                print(f"worker-comfyui - Uploading {filename} to S3...")
+                                s3_url = rp_upload.upload_image(job_id, temp_file_path)
+                                os.remove(temp_file_path)
+                                print(
+                                    f"worker-comfyui - Uploaded {filename} to S3: {s3_url}"
+                                )
+                                file_output_data.append(
+                                    {
+                                        "filename": filename,
+                                        "type": "s3_url",
+                                        "data": s3_url,
+                                    }
+                                )
+                            except Exception as e:
+                                error_msg = f"Error uploading file {filename} to S3: {e}"
+                                print(f"worker-comfyui - {error_msg}")
+                                errors.append(error_msg)
+                                if "temp_file_path" in locals() and os.path.exists(
+                                    temp_file_path
+                                ):
+                                    try:
+                                        os.remove(temp_file_path)
+                                    except OSError as rm_err:
+                                        print(
+                                            f"worker-comfyui - Error removing temp file {temp_file_path}: {rm_err}"
+                                        )
+                        else:
+                            try:
+                                base64_file = base64.b64encode(file_bytes).decode(
+                                    "utf-8"
+                                )
+                                file_output_data.append(
+                                    {
+                                        "filename": filename,
+                                        "type": "base64",
+                                        "data": base64_file,
+                                    }
+                                )
+                                print(
+                                    f"worker-comfyui - Encoded file {filename} as base64 ({len(file_bytes)} bytes)"
+                                )
+                            except Exception as e:
+                                error_msg = (
+                                    f"Error encoding file {filename} to base64: {e}"
+                                )
+                                print(f"worker-comfyui - {error_msg}")
+                                errors.append(error_msg)
+                    else:
+                        error_msg = f"Failed to fetch file data for {filename} from /view endpoint."
+                        print(f"worker-comfyui - {error_msg}")
+                        errors.append(error_msg)
 
     except websocket.WebSocketException as e:
         print(f"worker-comfyui - WebSocket Error: {e}")
@@ -792,24 +883,31 @@ def handler(job):
     if output_data:
         final_result["images"] = output_data
 
+    if file_output_data:
+        final_result["files"] = file_output_data
+
     if errors:
         final_result["errors"] = errors
         print(f"worker-comfyui - Job completed with errors/warnings: {errors}")
 
-    if not output_data and errors:
-        print(f"worker-comfyui - Job failed with no output images.")
+    has_any_output = output_data or file_output_data
+
+    if not has_any_output and errors:
+        print(f"worker-comfyui - Job failed with no outputs.")
         return {
             "error": "Job processing failed",
             "details": errors,
         }
-    elif not output_data and not errors:
+    elif not has_any_output and not errors:
         print(
-            f"worker-comfyui - Job completed successfully, but the workflow produced no images."
+            f"worker-comfyui - Job completed successfully, but the workflow produced no outputs."
         )
-        final_result["status"] = "success_no_images"
+        final_result["status"] = "success_no_outputs"
         final_result["images"] = []
 
-    print(f"worker-comfyui - Job completed. Returning {len(output_data)} image(s).")
+    print(
+        f"worker-comfyui - Job completed. Returning {len(output_data)} image(s) and {len(file_output_data)} file(s)."
+    )
     return final_result
 
 
