@@ -2,6 +2,10 @@
 # Lightweight build for GitHub Actions - PyTorch, ComfyUI, and nodes installed at runtime
 # Based on: lum3on/wan2.2_runpod-temp
 # Repo: majdsalim/LXOtesting
+#
+# BUILD_MODE:
+#   compute    (default) - ComfyUI foreground on 0.0.0.0:8188 + JupyterLab on 8189
+#   serverless           - ComfyUI background on localhost:8188 + handler.py foreground (RunPod Serverless)
 
 # ============================================================================
 # Stage 1: Base image with CUDA 12.8.1 (NO PyTorch - installed at runtime)
@@ -10,6 +14,7 @@
 FROM nvidia/cuda:12.8.1-cudnn-devel-ubuntu24.04 AS base
 
 # Build arguments
+ARG BUILD_MODE=compute
 # ComfyUI version is handled at runtime by runtime-init.sh
 # Set COMFYUI_USE_LATEST=true (default) for latest, or false + COMFYUI_VERSION for pinned
 
@@ -82,14 +87,16 @@ RUN chmod +x /scripts/download_models.sh
 COPY scripts/runtime-init.sh /scripts/runtime-init.sh
 RUN chmod +x /scripts/runtime-init.sh
 
-# Create custom start script that runs runtime-init then starts services
-# OPTIMIZED: JupyterLab starts IMMEDIATELY after init, BEFORE model downloads
-# This allows users to access JupyterLab to download additional models while WAN models are loading
+# ============================================================================
+# Start script generation — differs by BUILD_MODE
+# ============================================================================
+
+# --- Shared preamble (both modes) ---
 RUN printf '#!/usr/bin/env bash\n\
 \n\
 echo ""\n\
 echo "╔═══════════════════════════════════════════════════════════════════╗"\n\
-echo "║           WAN 2.2 RunPod Template - Starting Up                   ║"\n\
+echo "║           LXO RunPod Template - Starting Up                       ║"\n\
 echo "╚═══════════════════════════════════════════════════════════════════╝"\n\
 echo ""\n\
 \n\
@@ -103,14 +110,18 @@ export LD_PRELOAD="${TCMALLOC}"\n\
 # Ensure /comfyui has proper permissions\n\
 chmod -R 777 /comfyui\n\
 chown -R root:root /comfyui\n\
-\n\
+\n' > /start.sh
+
+# --- Mode-specific section ---
+ARG BUILD_MODE=compute
+
+# COMPUTE MODE: JupyterLab + model downloads + ComfyUI foreground (0.0.0.0)
+RUN if [ "$BUILD_MODE" = "compute" ]; then \
+    printf '# --- COMPUTE MODE ---\n\
 echo ""\n\
 echo "╔═══════════════════════════════════════════════════════════════════╗"\n\
-echo "║  🚀 JUPYTERLAB STARTING (Port 8189) - Available NOW!              ║"\n\
+echo "║  JUPYTERLAB STARTING (Port 8189) - Available NOW!                 ║"\n\
 echo "╚═══════════════════════════════════════════════════════════════════╝"\n\
-echo "   📂 Root: /comfyui"\n\
-echo "   🔓 Auth: Disabled (no token required)"\n\
-echo "   💡 Use JupyterLab to download additional models while WAN loads!"\n\
 echo ""\n\
 \n\
 # Start JupyterLab IMMEDIATELY (before model downloads)\n\
@@ -118,31 +129,24 @@ jupyter lab --config=/root/.jupyter/jupyter_lab_config.py > /var/log/jupyter.log
 JUPYTER_PID=$!\n\
 sleep 1\n\
 if ps -p $JUPYTER_PID > /dev/null 2>&1; then\n\
-    echo "   ✅ JupyterLab running (PID: $JUPYTER_PID)"\n\
+    echo "   JupyterLab running (PID: $JUPYTER_PID)"\n\
 else\n\
-    echo "   ⚠️  JupyterLab may have issues - check /var/log/jupyter.log"\n\
+    echo "   WARNING: JupyterLab may have issues - check /var/log/jupyter.log"\n\
 fi\n\
 echo ""\n\
 \n\
-# Download models in background - JupyterLab is already accessible!\n\
+# Download models\n\
 echo "╔═══════════════════════════════════════════════════════════════════╗"\n\
-echo "║  📦 MODEL DOWNLOAD STARTING (Background)                          ║"\n\
+echo "║  MODEL DOWNLOAD STARTING                                          ║"\n\
 echo "╚═══════════════════════════════════════════════════════════════════╝"\n\
-echo "   💡 JupyterLab is accessible NOW while models download!"\n\
-echo ""\n\
 /scripts/download_models.sh\n\
 echo ""\n\
 \n\
 # Allow operators to tweak verbosity; default is DEBUG\n\
 : "${COMFY_LOG_LEVEL:=DEBUG}"\n\
 \n\
-# VRAM management mode (set via RunPod env var COMFY_VRAM_MODE)\n\
-# highvram  = keep all models in VRAM (fastest, needs enough VRAM)\n\
-# gpu-only  = everything on GPU, never offload to CPU\n\
-# normalvram = ComfyUI default auto-detection\n\
-# lowvram   = offload layers to CPU (slow, for small GPUs)\n\
+# VRAM management mode\n\
 : "${COMFY_VRAM_MODE:=normalvram}"\n\
-\n\
 VRAM_FLAG=""\n\
 case "$COMFY_VRAM_MODE" in\n\
     highvram)  VRAM_FLAG="--highvram" ;;\n\
@@ -154,14 +158,14 @@ case "$COMFY_VRAM_MODE" in\n\
 esac\n\
 \n\
 echo "╔═══════════════════════════════════════════════════════════════════╗"\n\
-echo "║  🎨 COMFYUI STARTING (Port 8188) + SageAttention                  ║"\n\
+echo "║  COMFYUI STARTING (Port 8188) - Compute Mode                      ║"\n\
 echo "╚═══════════════════════════════════════════════════════════════════╝"\n\
-echo "   ⚡ SageAttention: ENABLED"\n\
-echo "   📊 Log Level: ${COMFY_LOG_LEVEL}"\n\
-echo "   🎮 VRAM Mode: ${COMFY_VRAM_MODE} ${VRAM_FLAG}"\n\
+echo "   SageAttention: ENABLED"\n\
+echo "   Log Level: ${COMFY_LOG_LEVEL}"\n\
+echo "   VRAM Mode: ${COMFY_VRAM_MODE} ${VRAM_FLAG}"\n\
 echo ""\n\
 \n\
-# Start ComfyUI\n\
+# Start ComfyUI in FOREGROUND (direct browser access on 0.0.0.0:8188)\n\
 python -u /comfyui/main.py \\\n\
     --disable-auto-launch \\\n\
     --disable-metadata \\\n\
@@ -170,25 +174,80 @@ python -u /comfyui/main.py \\\n\
     --verbose "${COMFY_LOG_LEVEL}" \\\n\
     --log-stdout \\\n\
     --use-sage-attention \\\n\
-    $VRAM_FLAG\n' > /start.sh
+    $VRAM_FLAG\n' >> /start.sh; \
+    \
+    # SERVERLESS MODE: model downloads + ComfyUI background + handler.py foreground
+    else \
+    printf '# --- SERVERLESS MODE ---\n\
+\n\
+# Download models (uses /workspace if network volume attached, else /comfyui/models)\n\
+echo "╔═══════════════════════════════════════════════════════════════════╗"\n\
+echo "║  MODEL DOWNLOAD STARTING                                          ║"\n\
+echo "╚═══════════════════════════════════════════════════════════════════╝"\n\
+/scripts/download_models.sh\n\
+echo ""\n\
+\n\
+# Allow operators to tweak verbosity; default is DEBUG\n\
+: "${COMFY_LOG_LEVEL:=DEBUG}"\n\
+\n\
+# VRAM management mode\n\
+: "${COMFY_VRAM_MODE:=normalvram}"\n\
+VRAM_FLAG=""\n\
+case "$COMFY_VRAM_MODE" in\n\
+    highvram)  VRAM_FLAG="--highvram" ;;\n\
+    gpu-only)  VRAM_FLAG="--gpu-only" ;;\n\
+    lowvram)   VRAM_FLAG="--lowvram" ;;\n\
+    novram)    VRAM_FLAG="--novram" ;;\n\
+    normal*)   VRAM_FLAG="" ;;\n\
+    *)         VRAM_FLAG="--highvram" ;;\n\
+esac\n\
+\n\
+echo "╔═══════════════════════════════════════════════════════════════════╗"\n\
+echo "║  COMFYUI STARTING (Background) - Serverless Mode                   ║"\n\
+echo "╚═══════════════════════════════════════════════════════════════════╝"\n\
+echo "   SageAttention: ENABLED"\n\
+echo "   Log Level: ${COMFY_LOG_LEVEL}"\n\
+echo "   VRAM Mode: ${COMFY_VRAM_MODE} ${VRAM_FLAG}"\n\
+echo "   Listening: localhost:8188 (internal only)"\n\
+echo ""\n\
+\n\
+# Start ComfyUI in BACKGROUND (localhost only — handler.py talks to it internally)\n\
+python -u /comfyui/main.py \\\n\
+    --disable-auto-launch \\\n\
+    --disable-metadata \\\n\
+    --verbose "${COMFY_LOG_LEVEL}" \\\n\
+    --log-stdout \\\n\
+    --use-sage-attention \\\n\
+    $VRAM_FLAG &\n\
+\n\
+echo ""\n\
+echo "╔═══════════════════════════════════════════════════════════════════╗"\n\
+echo "║  RUNPOD HANDLER STARTING                                           ║"\n\
+echo "╚═══════════════════════════════════════════════════════════════════╝"\n\
+echo "   Handler connects to ComfyUI at 127.0.0.1:8188"\n\
+echo "   Waiting for RunPod jobs..."\n\
+echo ""\n\
+\n\
+# Start RunPod handler in FOREGROUND (receives jobs from RunPod queue)\n\
+python -u /handler.py\n' >> /start.sh; \
+    fi
 
 RUN chmod +x /start.sh
 
-# Expose ports
-# 8188 - ComfyUI API
-# 8189 - JupyterLab
+# Expose ports (serverless only needs 8188 internally, but expose both for flexibility)
 EXPOSE 8188 8189
 
 # Set the default command
 CMD ["/start.sh"]
 
-# Labels
+# Labels (BUILD_MODE is injected at build time)
+ARG BUILD_MODE=compute
 LABEL maintainer="majdsalim/LXOtesting"
-LABEL description="LXO RunPod compute template. ComfyUI (latest) on port 8188, JupyterLab on port 8189. Runtime-installed PyTorch, nodes, and SageAttention."
+LABEL description="LXO RunPod template. BUILD_MODE=${BUILD_MODE}. ComfyUI (latest) + runtime-installed PyTorch, nodes, and SageAttention."
 LABEL cuda.version="12.8.1"
 LABEL pytorch.version="runtime-install"
 LABEL comfyui.version="latest (runtime)"
 LABEL template.type="ci-optimized"
+LABEL build.mode="${BUILD_MODE}"
 LABEL ports.comfyui="8188"
-LABEL ports.jupyterlab="8189"
 

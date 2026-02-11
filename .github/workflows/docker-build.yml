@@ -1,4 +1,4 @@
-name: Build and Push Docker Image to GHCR
+name: Build and Push Docker Images to GHCR
 
 on:
   push:
@@ -25,6 +25,15 @@ jobs:
     permissions:
       contents: read
       packages: write
+    strategy:
+      matrix:
+        include:
+          - build_mode: compute
+            tag_suffix: latest
+            cache_suffix: buildcache
+          - build_mode: serverless
+            tag_suffix: serverless
+            cache_suffix: buildcache-serverless
 
     steps:
       - name: Checkout repository
@@ -50,15 +59,10 @@ jobs:
         with:
           images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
           tags: |
-            type=ref,event=branch
-            type=ref,event=pr
-            type=semver,pattern={{version}}
-            type=semver,pattern={{major}}.{{minor}}
-            type=semver,pattern={{major}}
-            type=sha,prefix={{branch}}-
-            type=raw,value=latest,enable={{is_default_branch}}
+            type=raw,value=${{ matrix.tag_suffix }},enable={{is_default_branch}}
+            type=sha,prefix=${{ matrix.build_mode }}-
 
-      - name: Build and push Docker image
+      - name: Build and push Docker image (${{ matrix.build_mode }})
         uses: docker/build-push-action@v5
         with:
           context: .
@@ -67,26 +71,30 @@ jobs:
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: |
-            type=registry,ref=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:buildcache
-            type=registry,ref=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest
-          cache-to: type=registry,ref=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:buildcache,mode=max
+            type=registry,ref=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ matrix.cache_suffix }}
+            type=registry,ref=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ matrix.tag_suffix }}
+          cache-to: type=registry,ref=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ matrix.cache_suffix }},mode=max
           provenance: false
           sbom: false
           build-args: |
             BUILDKIT_INLINE_CACHE=1
+            BUILD_MODE=${{ matrix.build_mode }}
 
       - name: Summary
         run: |
-          echo "## Docker Build Complete!" >> $GITHUB_STEP_SUMMARY
+          echo "## Docker Build Complete (${{ matrix.build_mode }})!" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "**Image:** \`${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "**Image:** \`${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ matrix.tag_suffix }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "**Build Mode:** \`${{ matrix.build_mode }}\`" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "**Tags:**" >> $GITHUB_STEP_SUMMARY
           echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
           echo "${{ steps.meta.outputs.tags }}" >> $GITHUB_STEP_SUMMARY
           echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "### Next Steps:" >> $GITHUB_STEP_SUMMARY
-          echo "1. Verify image at: https://github.com/${{ github.repository_owner }}?tab=packages" >> $GITHUB_STEP_SUMMARY
-          echo "2. Pull: \`docker pull ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest\`" >> $GITHUB_STEP_SUMMARY
-          echo "3. Deploy to RunPod using this image URL" >> $GITHUB_STEP_SUMMARY
+          echo "### Usage:" >> $GITHUB_STEP_SUMMARY
+          if [ "${{ matrix.build_mode }}" = "compute" ]; then
+            echo "- **Compute pod:** Use \`:latest\` tag for interactive development" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "- **Serverless endpoint:** Use \`:serverless\` tag for RunPod Serverless" >> $GITHUB_STEP_SUMMARY
+          fi

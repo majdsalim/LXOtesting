@@ -137,7 +137,7 @@ The handler does all the heavy lifting. For each job it:
 
 ## 4. Development Phases
 
-### Phase 1: Develop Workflows on Compute Pod (CURRENT)
+### Phase 1: Develop Workflows on Compute Pod (COMPLETE ✓)
 Deploy a compute pod from your own Docker image (`ghcr.io/majdsalim/lxotesting:latest`).
 Keep the pod running while developing. No network volume needed — data lives in the container.
 
@@ -153,8 +153,8 @@ Keep the pod running while developing. No network volume needed — data lives i
 - [x] **Maintain SETUP_LOG.md** — log every model, node, and package installed (2026-02-10)
 - [x] Export finalized workflows via "Save (API Format)" in ComfyUI — 3 workflows exported (2026-02-10)
 - [x] Translate SETUP_LOG.md into runtime scripts — nodes added to runtime-init.sh, models added to download_models.sh (DOWNLOAD_GAUSSIAN flag) (2026-02-10)
-- [ ] Rebuild image, deploy fresh pod, verify everything auto-installs correctly
-- [ ] Test workflows work via API (curl to the compute pod's URL)
+- [x] Rebuild image, deploy fresh pod, verify everything auto-installs correctly (2026-02-10)
+- [x] Test workflows work via API (curl to the compute pod's URL) — simple_test.json verified (2026-02-10)
 
 **Compute pod template `LXOtemp` settings:**
 - Container image: `ghcr.io/majdsalim/lxotesting:latest`
@@ -186,14 +186,15 @@ Keep the pod running while developing. No network volume needed — data lives i
 - JupyterLab running on port 8189
 - No model downloads (DOWNLOAD_ALL=false working correctly)
 
-### Phase 2: Dockerize for Serverless
+### Phase 2: Dockerize for Serverless (CURRENT)
 Once workflows are stable and tested:
 
-- [ ] Translate SETUP_LOG.md into Dockerfile instructions (your models, your nodes)
-- [ ] Create a serverless Dockerfile (modify start.sh: ComfyUI background + handler.py foreground)
-- [ ] Push to GitHub → CI/CD rebuilds the Docker image
-- [ ] Create Serverless Endpoint on RunPod with the built image
-- [ ] Test with API request (curl)
+- [x] Translate SETUP_LOG.md into Dockerfile instructions — already done in Phase 1 (runtime-init.sh + download_models.sh)
+- [ ] Add serverless mode to Dockerfile.ci via BUILD_MODE arg (serverless start.sh: ComfyUI background + handler.py, no JupyterLab)
+- [ ] Update CI/CD to build both images: `:latest` (compute) and `:serverless`
+- [ ] Push to GitHub → CI/CD builds both Docker images
+- [ ] Create Serverless Endpoint on RunPod with the `:serverless` image
+- [ ] Test with API request (curl to RunPod Serverless API)
 
 ### Phase 3: TypeScript Test App
 - [ ] Build simple TypeScript app to test workflows via RunPod Serverless API
