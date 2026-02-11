@@ -358,6 +358,13 @@ if [ ! -d "comfyui-GaussianViewer" ]; then
     git clone https://github.com/CarlMarkswx/comfyui-GaussianViewer.git
 fi
 
+# Install comfyui-save-ply (local custom node — registers PLY files in ComfyUI history)
+if [ ! -d "comfyui-save-ply" ] && [ -d "/custom_nodes/comfyui-save-ply" ]; then
+    echo "Installing comfyui-save-ply (local SavePLY output node)..."
+    cp -r /custom_nodes/comfyui-save-ply /comfyui/custom_nodes/comfyui-save-ply
+    echo "  ✅ comfyui-save-ply installed"
+fi
+
 # ============================================================================
 # FLUX Custom Nodes - Only installed when DOWNLOAD_FLUX=true
 # ============================================================================

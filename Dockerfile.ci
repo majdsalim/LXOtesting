@@ -87,6 +87,9 @@ RUN chmod +x /scripts/download_models.sh
 COPY scripts/runtime-init.sh /scripts/runtime-init.sh
 RUN chmod +x /scripts/runtime-init.sh
 
+# Copy local custom nodes (e.g. SavePLY) — symlinked into /comfyui/custom_nodes at runtime
+COPY custom_nodes/ /custom_nodes/
+
 # ============================================================================
 # Start script generation — differs by BUILD_MODE
 # ============================================================================
