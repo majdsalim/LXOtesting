@@ -1,18 +1,37 @@
-import { motion } from 'framer-motion'
+import { useMemo, useState } from 'react'
+import { motion, AnimatePresence } from 'framer-motion'
 import { useAppStore } from '../store/appStore'
 
 export default function ResultDisplay() {
-  const { enhancedImage, originalImage, screenshot, reset } = useAppStore()
+  const {
+    enhancedImage,
+    originalImage,
+    screenshot,
+    originalImageAspectRatio,
+    setPipelineState,
+    reset,
+  } = useAppStore()
+  const [expandedImage, setExpandedImage] = useState<{
+    src: string
+    label: string
+  } | null>(null)
 
   if (!enhancedImage) return null
+
+  const imageAspectRatio = useMemo(() => {
+    if (!originalImageAspectRatio || originalImageAspectRatio <= 0) return '4 / 3'
+    return String(originalImageAspectRatio)
+  }, [originalImageAspectRatio])
 
   const handleDownload = () => {
     if (!enhancedImage) return
     const link = document.createElement('a')
-    link.href = enhancedImage.startsWith('data:')
-      ? enhancedImage
-      : `data:image/png;base64,${enhancedImage}`
+    link.href = enhancedImage
     link.download = 'enhanced_view.png'
+    // For cross-origin S3 URLs, open in a new tab instead
+    if (enhancedImage.startsWith('http')) {
+      link.target = '_blank'
+    }
     link.click()
   }
 
@@ -32,6 +51,14 @@ export default function ResultDisplay() {
           AI Enhanced View
         </h2>
         <div className="flex gap-3">
+          <button
+            onClick={() => setPipelineState('viewing_splat')}
+            className="px-4 py-2 rounded-lg text-sm font-medium
+                       bg-surface-2 hover:bg-surface-2/80 border border-border
+                       text-text-main transition-colors"
+          >
+            Back to 3D Viewer
+          </button>
           <button
             onClick={handleDownload}
             className="px-4 py-2 rounded-lg text-sm font-medium
@@ -59,7 +86,11 @@ export default function ResultDisplay() {
             <img
               src={originalImage}
               alt="Original"
-              className="w-full aspect-[4/3] object-cover"
+              onClick={() =>
+                setExpandedImage({ src: originalImage, label: 'Original' })
+              }
+              className="w-full object-contain cursor-zoom-in bg-black"
+              style={{ aspectRatio: imageAspectRatio }}
             />
           )}
           <div className="p-3 border-t border-border">
@@ -75,7 +106,11 @@ export default function ResultDisplay() {
             <img
               src={screenshot}
               alt="3D View"
-              className="w-full aspect-[4/3] object-cover"
+              onClick={() =>
+                setExpandedImage({ src: screenshot, label: '3D Splat View' })
+              }
+              className="w-full object-contain cursor-zoom-in bg-black"
+              style={{ aspectRatio: imageAspectRatio }}
             />
           )}
           <div className="p-3 border-t border-border">
@@ -88,13 +123,14 @@ export default function ResultDisplay() {
         {/* Enhanced */}
         <div className="rounded-xl overflow-hidden border border-accent-indigo/30 bg-surface-1 ring-1 ring-accent-indigo/20">
           <img
-            src={
-              enhancedImage.startsWith('data:')
-                ? enhancedImage
-                : `data:image/png;base64,${enhancedImage}`
-            }
+            src={enhancedImage}
             alt="Enhanced"
-            className="w-full aspect-[4/3] object-cover"
+            crossOrigin="anonymous"
+            onClick={() =>
+              setExpandedImage({ src: enhancedImage, label: 'AI Enhanced' })
+            }
+            className="w-full object-contain cursor-zoom-in bg-black"
+            style={{ aspectRatio: imageAspectRatio }}
           />
           <div className="p-3 border-t border-accent-indigo/20">
             <p className="text-accent-indigo text-xs font-medium uppercase tracking-wider">
@@ -103,6 +139,45 @@ export default function ResultDisplay() {
           </div>
         </div>
       </div>
+
+      <AnimatePresence>
+        {expandedImage && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            onClick={() => setExpandedImage(null)}
+            className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-6"
+          >
+            <motion.div
+              initial={{ scale: 0.95, opacity: 0 }}
+              animate={{ scale: 1, opacity: 1 }}
+              exit={{ scale: 0.95, opacity: 0 }}
+              transition={{ duration: 0.2 }}
+              onClick={(e) => e.stopPropagation()}
+              className="relative w-full max-w-6xl max-h-[90vh] rounded-xl border border-border bg-surface-1 p-3"
+            >
+              <button
+                onClick={() => setExpandedImage(null)}
+                className="absolute top-3 right-3 z-10 w-8 h-8 rounded-full
+                           bg-black/70 border border-border text-white
+                           hover:bg-black transition-colors flex items-center justify-center"
+                aria-label="Close full image"
+              >
+                ×
+              </button>
+              <img
+                src={expandedImage.src}
+                alt={expandedImage.label}
+                className="w-full max-h-[82vh] object-contain rounded-lg bg-black"
+              />
+              <p className="text-text-dim text-xs mt-2 text-center uppercase tracking-wider">
+                {expandedImage.label}
+              </p>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
     </motion.div>
   )
 }

@@ -5,7 +5,13 @@ import { useAppStore } from '../store/appStore'
 export default function ImageUpload() {
   const [isDragging, setIsDragging] = useState(false)
   const fileInputRef = useRef<HTMLInputElement>(null)
-  const { originalImage, setOriginalImage, setPipelineState } = useAppStore()
+  const {
+    originalImage,
+    originalImageName,
+    originalImageAspectRatio,
+    setOriginalImage,
+    setPipelineState,
+  } = useAppStore()
 
   const handleFile = useCallback(
     (file: File) => {
@@ -17,7 +23,16 @@ export default function ImageUpload() {
       const reader = new FileReader()
       reader.onload = (e) => {
         const dataUrl = e.target?.result as string
-        setOriginalImage(dataUrl, file.name)
+        const img = new Image()
+        img.onload = () => {
+          const aspectRatio =
+            img.width > 0 && img.height > 0 ? img.width / img.height : null
+          setOriginalImage(dataUrl, file.name, aspectRatio)
+        }
+        img.onerror = () => {
+          setOriginalImage(dataUrl, file.name, null)
+        }
+        img.src = dataUrl
       }
       reader.readAsDataURL(file)
     },
@@ -129,11 +144,19 @@ export default function ImageUpload() {
             transition={{ duration: 0.3 }}
             className="relative w-full max-w-md"
           >
-            <div className="relative rounded-xl overflow-hidden border border-border">
+            <div
+              className="relative rounded-xl overflow-hidden border border-border bg-black"
+              style={{
+                aspectRatio:
+                  originalImageAspectRatio && originalImageAspectRatio > 0
+                    ? String(originalImageAspectRatio)
+                    : '4 / 3',
+              }}
+            >
               <img
                 src={originalImage}
                 alt="Uploaded"
-                className="w-full aspect-[4/3] object-cover"
+                className="w-full h-full object-contain"
               />
 
               {/* Remove button */}
@@ -163,7 +186,7 @@ export default function ImageUpload() {
             </div>
 
             <p className="text-text-dim text-xs mt-2 text-center truncate">
-              {useAppStore.getState().originalImageName}
+              {originalImageName}
             </p>
           </motion.div>
         )}

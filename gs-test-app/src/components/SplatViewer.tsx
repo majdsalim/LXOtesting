@@ -1,58 +1,163 @@
-import { useRef, useCallback, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import { motion } from 'framer-motion'
 import { Application, Entity } from '@playcanvas/react'
-import { Camera, GSplat, Script } from '@playcanvas/react/components'
+import { Camera, Script } from '@playcanvas/react/components'
 import { CameraControls } from 'playcanvas/scripts/esm/camera-controls.mjs'
-import { useSplat } from '@playcanvas/react/hooks'
+import { useApp, useParent, useSplat } from '@playcanvas/react/hooks'
+import type { Asset, Entity as PcEntity } from 'playcanvas'
 import { useAppStore } from '../store/appStore'
 
 interface SplatSceneProps {
   url: string
+  onLoadingChange: (isLoading: boolean) => void
 }
 
-function SplatScene({ url }: SplatSceneProps) {
-  const { asset } = useSplat(url)
-
-  if (!asset) {
-    return null
+function ManualGSplat({
+  asset,
+}: {
+  asset: Asset
+}) {
+  const entity = useParent() as PcEntity & {
+    gsplat?: unknown
+    addComponent: (name: 'gsplat', data: { asset: Asset }) => void
+    removeComponent: (name: 'gsplat') => void
   }
 
+  useEffect(() => {
+    if (entity.gsplat) {
+      entity.removeComponent('gsplat')
+    }
+
+    entity.addComponent('gsplat', { asset })
+
+    return () => {
+      if (entity.gsplat) {
+        entity.removeComponent('gsplat')
+      }
+    }
+  }, [entity, asset])
+
+  return null
+}
+
+function SplatScene({ url, onLoadingChange }: SplatSceneProps) {
+  const { asset, loading, error } = useSplat(url)
+
+  useEffect(() => {
+    onLoadingChange(loading)
+  }, [loading, onLoadingChange])
+
+  useEffect(() => {
+    if (error) {
+      console.error('[SplatScene] Failed to load splat:', error)
+    }
+  }, [error])
+
+  if (!asset) return null
+
   return (
-    <Entity name="Splat" position={[0, 0, 0]}>
-      <GSplat asset={asset} />
+    <Entity name="Splat" position={[0, 0, 0]} rotation={[0, 0, 180]}>
+      <ManualGSplat asset={asset} />
     </Entity>
   )
 }
 
-export default function SplatViewer() {
-  const containerRef = useRef<HTMLDivElement>(null)
-  const [isCapturing, setIsCapturing] = useState(false)
-  const { plyBlobUrl, setScreenshot, setPipelineState } = useAppStore()
+function FrameCapture({
+  requestId,
+  onCaptured,
+  onCaptureFailed,
+}: {
+  requestId: number
+  onCaptured: (dataUrl: string) => void
+  onCaptureFailed: (message: string) => void
+}) {
+  const app = useApp()
 
-  const handleScreenshot = useCallback(() => {
-    // Find the canvas element inside our container
-    const canvas = containerRef.current?.querySelector('canvas')
-    if (!canvas) {
-      console.error('Could not find PlayCanvas canvas element')
-      return
+  useEffect(() => {
+    if (requestId === 0) return
+
+    let cancelled = false
+    const timeoutId = window.setTimeout(() => {
+      if (cancelled) return
+      app.off('frameend', handleFrameEnd)
+      onCaptureFailed('Capture timed out waiting for rendered frame.')
+    }, 2000)
+
+    const handleFrameEnd = () => {
+      app.off('frameend', handleFrameEnd)
+      window.clearTimeout(timeoutId)
+      if (cancelled) return
+
+      try {
+        const canvas = app.graphicsDevice.canvas as HTMLCanvasElement
+        const dataUrl = canvas.toDataURL('image/png')
+        if (!dataUrl || dataUrl === 'data:,') {
+          onCaptureFailed('Capture produced an empty image.')
+          return
+        }
+        onCaptured(dataUrl)
+      } catch (error) {
+        onCaptureFailed(
+          error instanceof Error ? error.message : 'Unknown capture error'
+        )
+      }
     }
 
-    setIsCapturing(true)
+    app.on('frameend', handleFrameEnd)
+    return () => {
+      cancelled = true
+      window.clearTimeout(timeoutId)
+      app.off('frameend', handleFrameEnd)
+    }
+  }, [requestId, app, onCaptured, onCaptureFailed])
 
-    // Small delay to ensure the current frame is rendered
-    requestAnimationFrame(() => {
-      try {
-        const dataUrl = canvas.toDataURL('image/png')
-        setScreenshot(dataUrl)
-        setPipelineState('capturing')
-      } catch (err) {
-        console.error('Failed to capture screenshot:', err)
-        useAppStore.getState().setError('Failed to capture screenshot')
-      } finally {
-        setIsCapturing(false)
-      }
-    })
-  }, [setScreenshot, setPipelineState])
+  return null
+}
+
+export default function SplatViewer() {
+  const [isCapturing, setIsCapturing] = useState(false)
+  const [captureRequestId, setCaptureRequestId] = useState(0)
+  const [isSplatLoading, setIsSplatLoading] = useState(true)
+
+  const {
+    plyBlobUrl,
+    originalImageAspectRatio,
+    setScreenshot,
+    setPipelineState,
+    setError,
+  } = useAppStore()
+
+  const viewerAspectRatio =
+    originalImageAspectRatio && originalImageAspectRatio > 0
+      ? originalImageAspectRatio
+      : 16 / 9
+
+  const handleRequestCapture = useCallback(() => {
+    setError(null)
+    setIsCapturing(true)
+    setCaptureRequestId((prev) => prev + 1)
+  }, [setError])
+
+  const handleCaptured = useCallback(
+    (dataUrl: string) => {
+      setIsCapturing(false)
+      setScreenshot(dataUrl)
+      setPipelineState('capturing')
+    },
+    [setScreenshot, setPipelineState]
+  )
+
+  const handleCaptureFailed = useCallback(
+    (message: string) => {
+      setIsCapturing(false)
+      setError(`Failed to capture view: ${message}`)
+    },
+    [setError]
+  )
+
+  useEffect(() => {
+    setIsSplatLoading(true)
+  }, [plyBlobUrl])
 
   if (!plyBlobUrl) return null
 
@@ -63,7 +168,6 @@ export default function SplatViewer() {
       transition={{ duration: 0.4 }}
       className="w-full max-w-4xl mx-auto"
     >
-      {/* Header */}
       <div className="flex items-center justify-between mb-4">
         <div>
           <h2
@@ -78,8 +182,8 @@ export default function SplatViewer() {
         </div>
 
         <button
-          onClick={handleScreenshot}
-          disabled={isCapturing}
+          onClick={handleRequestCapture}
+          disabled={isCapturing || isSplatLoading}
           className="px-5 py-2.5 rounded-lg font-medium text-sm
                      bg-accent-purple hover:bg-accent-purple/80
                      text-white transition-colors duration-200
@@ -105,28 +209,54 @@ export default function SplatViewer() {
               d="M16.5 12.75a4.5 4.5 0 11-9 0 4.5 4.5 0 019 0z"
             />
           </svg>
-          {isCapturing ? 'Capturing...' : 'Capture View'}
+          {isSplatLoading ? 'Loading Splat...' : isCapturing ? 'Capturing...' : 'Capture View'}
         </button>
       </div>
 
-      {/* Viewer */}
       <div
-        ref={containerRef}
-        className="splat-canvas relative w-full rounded-xl overflow-hidden border border-border bg-black"
-        style={{ height: '500px' }}
+        className="relative w-full rounded-xl overflow-hidden border border-border bg-black"
+        style={{
+          aspectRatio: String(viewerAspectRatio),
+          minHeight: '360px',
+          maxHeight: '72vh',
+        }}
       >
-        <Application
-          graphicsDeviceOptions={{ antialias: false }}
-        >
-          <Entity name="Camera" position={[0, 1, 3]}>
-            <Camera clearColor={[0.05, 0.04, 0.035, 1]} />
-            <Script script={CameraControls} />
+        <Application graphicsDeviceOptions={{ preserveDrawingBuffer: true, alpha: false }}>
+          <Entity name="Camera" position={[0, 0, -2.2]}>
+            <Camera clearColor="#0d0a09" nearClip={0.01} farClip={10000} />
+            <Script
+              script={CameraControls}
+              moveSpeed={3}
+              moveFastSpeed={6}
+              moveSlowSpeed={1.5}
+            />
           </Entity>
-          <SplatScene url={plyBlobUrl} />
+          <SplatScene
+            url={plyBlobUrl}
+            onLoadingChange={setIsSplatLoading}
+          />
+          <FrameCapture
+            requestId={captureRequestId}
+            onCaptured={handleCaptured}
+            onCaptureFailed={handleCaptureFailed}
+          />
         </Application>
+
+        {isSplatLoading && (
+          <div className="absolute inset-0 z-10 bg-black/70 backdrop-blur-sm flex items-center justify-center">
+            <div className="flex flex-col items-center gap-3">
+              <div className="w-10 h-10 rounded-full border-2 border-accent-purple/30 border-t-accent-purple animate-spin" />
+              <p className="text-sm text-text-main font-medium">
+                Loading 3D Gaussian Splat...
+              </p>
+              <p className="text-xs text-text-dim">
+                Downloading and preparing PLY from storage
+              </p>
+            </div>
+          </div>
+        )}
       </div>
 
-      {/* Controls hint */}
       <div className="flex items-center justify-center gap-4 mt-3">
         <span className="text-text-dim text-xs flex items-center gap-1.5">
           <kbd className="px-1.5 py-0.5 rounded bg-surface-2 border border-border text-[10px] font-mono">

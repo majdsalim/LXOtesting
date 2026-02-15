@@ -17,7 +17,12 @@ export interface AppState {
   // Original uploaded image
   originalImage: string | null // base64 data URL
   originalImageName: string | null
-  setOriginalImage: (data: string | null, name: string | null) => void
+  originalImageAspectRatio: number | null
+  setOriginalImage: (
+    data: string | null,
+    name: string | null,
+    aspectRatio?: number | null
+  ) => void
 
   // SHARP workflow result - PLY file
   plyData: string | null // base64 encoded PLY
@@ -52,26 +57,36 @@ export const useAppStore = create<AppState>((set, get) => ({
 
   originalImage: null,
   originalImageName: null,
-  setOriginalImage: (data, name) =>
-    set({ originalImage: data, originalImageName: name }),
+  originalImageAspectRatio: null,
+  setOriginalImage: (data, name, aspectRatio = null) =>
+    set({
+      originalImage: data,
+      originalImageName: name,
+      originalImageAspectRatio: aspectRatio,
+    }),
 
   plyData: null,
   plyBlobUrl: null,
   setPlyData: (data) => {
-    // Revoke previous blob URL if any
+    // Revoke previous blob URL if any (only revoke blob: URLs, not S3 URLs)
     const prev = get().plyBlobUrl
-    if (prev) URL.revokeObjectURL(prev)
+    if (prev && prev.startsWith('blob:')) URL.revokeObjectURL(prev)
 
     if (data) {
-      // Convert base64 to blob URL for PlayCanvas
-      const binary = atob(data)
-      const bytes = new Uint8Array(binary.length)
-      for (let i = 0; i < binary.length; i++) {
-        bytes[i] = binary.charCodeAt(i)
+      // If data is already a URL (S3 presigned URL), use it directly
+      if (data.startsWith('http://') || data.startsWith('https://')) {
+        set({ plyData: data, plyBlobUrl: data })
+      } else {
+        // Assume base64 — convert to blob URL for PlayCanvas
+        const binary = atob(data)
+        const bytes = new Uint8Array(binary.length)
+        for (let i = 0; i < binary.length; i++) {
+          bytes[i] = binary.charCodeAt(i)
+        }
+        const blob = new Blob([bytes], { type: 'application/octet-stream' })
+        const url = URL.createObjectURL(blob)
+        set({ plyData: data, plyBlobUrl: url })
       }
-      const blob = new Blob([bytes], { type: 'application/octet-stream' })
-      const url = URL.createObjectURL(blob)
-      set({ plyData: data, plyBlobUrl: url })
     } else {
       set({ plyData: null, plyBlobUrl: null })
     }
@@ -93,11 +108,12 @@ export const useAppStore = create<AppState>((set, get) => ({
 
   reset: () => {
     const prev = get().plyBlobUrl
-    if (prev) URL.revokeObjectURL(prev)
+    if (prev && prev.startsWith('blob:')) URL.revokeObjectURL(prev)
     set({
       pipelineState: 'idle',
       originalImage: null,
       originalImageName: null,
+      originalImageAspectRatio: null,
       plyData: null,
       plyBlobUrl: null,
       screenshot: null,

@@ -1,6 +1,7 @@
 import { useCallback } from 'react'
 import { submitJob, pollUntilComplete } from '../api/runpod'
-import { prepareSHARPWorkflow, prepareQwenWorkflow } from '../utils/workflow'
+import { enhanceWithFal } from '../api/fal'
+import { prepareSHARPWorkflow } from '../utils/workflow'
 import { useAppStore } from '../store/appStore'
 
 /**
@@ -17,7 +18,7 @@ function stripDataUrlPrefix(dataUrl: string): string {
 /**
  * Hook that manages the full pipeline:
  * 1. Upload image → SHARP workflow → get PLY
- * 2. Capture screenshot → Qwen workflow → get enhanced image
+ * 2. Capture screenshot → fal.ai Qwen endpoint → get enhanced image
  */
 export function useRunPodJob() {
   const store = useAppStore()
@@ -92,7 +93,7 @@ export function useRunPodJob() {
   }, [store])
 
   /**
-   * Step 2: Send the screenshot + original image through the Qwen workflow.
+   * Step 2: Send screenshot + original image to fal.ai Qwen endpoint.
    */
   const enhanceScreenshot = useCallback(async () => {
     const { screenshot, originalImage } = useAppStore.getState()
@@ -100,50 +101,12 @@ export function useRunPodJob() {
 
     try {
       store.setPipelineState('enhancing')
-      store.setJobProgress('Submitting enhancement job...')
+      store.setJobProgress('Submitting enhancement job')
 
-      const screenshotName = 'gs_screenshot.png'
-      const originalName = 'gs_original.png'
-
-      // Prepare Qwen workflow
-      const workflow = prepareQwenWorkflow(screenshotName, originalName)
-
-      // Upload both images
-      const screenshotBase64 = stripDataUrlPrefix(screenshot)
-      const originalBase64 = stripDataUrlPrefix(originalImage)
-
-      const result = await submitJob(workflow, [
-        { name: screenshotName, image: screenshotBase64 },
-        { name: originalName, image: originalBase64 },
-      ])
-
-      store.setCurrentJobId(result.id)
-      store.setJobProgress(`Enhancement job ${result.id} submitted. Waiting...`)
-
-      // Poll until complete
-      const completed = await pollUntilComplete(
-        result.id,
-        (status, attempt) => {
-          store.setJobProgress(`Status: ${status} (poll #${attempt})`)
-        }
-      )
-
-      // Extract the enhanced image
-      const images = completed.output?.images
-      if (images && images.length > 0) {
-        const imgData = images[0].data
-        const enhancedDataUrl = imgData.startsWith('data:')
-          ? imgData
-          : `data:image/png;base64,${imgData}`
-        store.setEnhancedImage(enhancedDataUrl)
-        store.setPipelineState('result')
-        store.setJobProgress('')
-      } else {
-        throw new Error(
-          'Enhancement completed but no image was returned. ' +
-            (completed.output?.errors?.join('; ') || 'Unknown error')
-        )
-      }
+      const { imageUrl } = await enhanceWithFal(screenshot, originalImage)
+      store.setEnhancedImage(imageUrl)
+      store.setPipelineState('result')
+      store.setJobProgress('')
     } catch (err) {
       console.error('enhanceScreenshot error:', err)
       store.setError(err instanceof Error ? err.message : String(err))
