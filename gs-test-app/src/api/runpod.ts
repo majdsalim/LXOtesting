@@ -73,6 +73,30 @@ export async function submitJob(
 }
 
 /**
+ * Submit a generic async job to the RunPod serverless endpoint.
+ * Useful for non-Comfy handlers such as direct SHARP inference.
+ */
+export async function submitInputJob(
+  input: Record<string, unknown>
+): Promise<SubmitJobResponse> {
+  const response = await fetch(`${BASE_URL}/run`, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${API_KEY}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({ input }),
+  })
+
+  if (!response.ok) {
+    const text = await response.text()
+    throw new Error(`RunPod API error (${response.status}): ${text}`)
+  }
+
+  return response.json()
+}
+
+/**
  * Get the status of a job.
  */
 export async function getJobStatus(jobId: string): Promise<RunPodJobResult> {

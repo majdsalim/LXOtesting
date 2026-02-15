@@ -16,6 +16,39 @@ echo "==================================================================="
 # COMFYUI_USE_LATEST=false  - Use pinned stable version (set COMFYUI_VERSION)
 # ============================================================================
 : "${COMFYUI_USE_LATEST:=true}"
+: "${ENABLE_COMFYUI:=true}"
+: "${ENABLE_SHARP_DIRECT:=true}"
+: "${DOWNLOAD_SHARP_MODEL:=false}"
+: "${DOWNLOAD_GAUSSIAN:=false}"  # legacy toggle
+
+# Backward-compat: legacy gaussian toggle also implies direct SHARP mode.
+if [ "$DOWNLOAD_GAUSSIAN" = "true" ]; then
+    DOWNLOAD_SHARP_MODEL="true"
+fi
+
+# Fast path for SHARP-only serverless workers.
+if [ "$ENABLE_COMFYUI" != "true" ]; then
+    echo "⚡ ENABLE_COMFYUI=false -> skipping ComfyUI/Jupyter/custom node initialization"
+    echo "⚡ Minimal runtime initialization (direct SHARP mode)"
+
+    echo "⚡ Installing HuggingFace CLI for fast downloads..."
+    uv pip install --no-cache huggingface-hub[cli,hf_transfer]
+    export HF_HUB_ENABLE_HF_TRANSFER=1
+
+    if [ "$ENABLE_SHARP_DIRECT" = "true" ] || [ "$DOWNLOAD_SHARP_MODEL" = "true" ]; then
+        if command -v sharp >/dev/null 2>&1; then
+            echo "✅ SHARP CLI already installed"
+        else
+            echo "🧠 Installing Apple SHARP CLI..."
+            uv pip install --no-cache git+https://github.com/apple/ml-sharp.git
+        fi
+    else
+        echo "⏭️  SHARP CLI install skipped (ENABLE_SHARP_DIRECT=false)"
+    fi
+
+    echo "✅ Runtime initialization complete (minimal mode)"
+    exit 0
+fi
 
 # Check if already initialized (for persistent storage)
 ALREADY_INITIALIZED=false
@@ -64,8 +97,27 @@ if [ "$ALREADY_INITIALIZED" = false ]; then
 
     echo "⚡ Installing HuggingFace CLI for fast model downloads..."
     uv pip install --no-cache huggingface-hub[cli,hf_transfer]
+
+    # Optional direct SHARP CLI support for non-Comfy stage-1 inference.
+    # Keep this gated so non-Gaussian deployments avoid extra install time.
+    if [ "$ENABLE_SHARP_DIRECT" = "true" ] || [ "${DOWNLOAD_SHARP_MODEL:-false}" = "true" ] || [ "${DOWNLOAD_GAUSSIAN:-false}" = "true" ]; then
+        echo "🧠 Installing Apple SHARP CLI (direct prediction mode)..."
+        uv pip install --no-cache git+https://github.com/apple/ml-sharp.git
+    fi
 fi
 export HF_HUB_ENABLE_HF_TRANSFER=1
+
+# Ensure SHARP CLI exists whenever Gaussian mode is enabled.
+# This must run even on already-initialized workers (persistent volume case),
+# otherwise direct SHARP jobs can fail fast with "sharp: command not found".
+if [ "$ENABLE_SHARP_DIRECT" = "true" ] || [ "${DOWNLOAD_SHARP_MODEL:-false}" = "true" ] || [ "${DOWNLOAD_GAUSSIAN:-false}" = "true" ]; then
+    if command -v sharp >/dev/null 2>&1; then
+        echo "✅ SHARP CLI already installed"
+    else
+        echo "🧠 SHARP CLI not found - installing Apple SHARP CLI..."
+        uv pip install --no-cache git+https://github.com/apple/ml-sharp.git
+    fi
+fi
 
 # ============================================================================
 # ComfyUI-Manager Installation - ALWAYS runs to ensure correct version

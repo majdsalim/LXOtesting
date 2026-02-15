@@ -1,7 +1,6 @@
 import { useCallback } from 'react'
-import { submitJob, pollUntilComplete } from '../api/runpod'
+import { submitInputJob, pollUntilComplete } from '../api/runpod'
 import { enhanceWithFal } from '../api/fal'
-import { prepareSHARPWorkflow } from '../utils/workflow'
 import { useAppStore } from '../store/appStore'
 
 /**
@@ -17,14 +16,14 @@ function stripDataUrlPrefix(dataUrl: string): string {
 
 /**
  * Hook that manages the full pipeline:
- * 1. Upload image → SHARP workflow → get PLY
+ * 1. Upload image → direct SHARP endpoint → get PLY
  * 2. Capture screenshot → fal.ai Qwen endpoint → get enhanced image
  */
 export function useRunPodJob() {
   const store = useAppStore()
 
   /**
-   * Step 1: Send the uploaded image through the SHARP workflow to generate a .ply file.
+   * Step 1: Send uploaded image to direct SHARP endpoint to generate a .ply file.
    */
   const generateSplat = useCallback(async () => {
     const { originalImage, originalImageName } = useAppStore.getState()
@@ -32,17 +31,14 @@ export function useRunPodJob() {
 
     try {
       store.setPipelineState('generating_splat')
-      store.setJobProgress('Submitting to RunPod...')
+      store.setJobProgress('Submitting to SHARP endpoint...')
 
-      // Prepare the workflow with the image filename
-      const uploadName = 'gs_input.png'
-      const workflow = prepareSHARPWorkflow(uploadName)
-
-      // Submit the job with the image
       const base64Data = stripDataUrlPrefix(originalImage)
-      const result = await submitJob(workflow, [
-        { name: uploadName, image: base64Data },
-      ])
+      const result = await submitInputJob({
+        mode: 'sharp_predict',
+        image_base64: base64Data,
+        image_name: originalImageName || 'gs_input.png',
+      })
 
       store.setCurrentJobId(result.id)
       store.setJobProgress(`Job ${result.id} submitted. Waiting...`)

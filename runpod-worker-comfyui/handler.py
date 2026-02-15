@@ -13,6 +13,7 @@ import uuid
 import tempfile
 import socket
 import traceback
+import subprocess
 
 # Time to wait between API check attempts in milliseconds
 COMFY_API_AVAILABLE_INTERVAL_MS = 50
@@ -149,12 +150,28 @@ def validate_input(job_input):
         except json.JSONDecodeError:
             return None, "Invalid JSON format in input"
 
-    # Validate 'workflow' in input
+    mode = job_input.get("mode", "comfy_workflow")
+
+    if mode == "sharp_predict":
+        image_base64 = job_input.get("image_base64")
+        image_url = job_input.get("image_url")
+        image_name = job_input.get("image_name", "input.png")
+
+        if not image_base64 and not image_url:
+            return None, "For mode='sharp_predict', provide either 'image_base64' or 'image_url'"
+
+        return {
+            "mode": mode,
+            "image_base64": image_base64,
+            "image_url": image_url,
+            "image_name": image_name,
+        }, None
+
+    # Default mode: existing ComfyUI workflow execution
     workflow = job_input.get("workflow")
     if workflow is None:
         return None, "Missing 'workflow' parameter"
 
-    # Validate 'images' in input, if provided
     images = job_input.get("images")
     if images is not None:
         if not isinstance(images, list) or not all(
@@ -165,11 +182,10 @@ def validate_input(job_input):
                 "'images' must be a list of objects with 'name' and 'image' keys",
             )
 
-    # Optional: API key for Comfy.org API Nodes, passed per-request
     comfy_org_api_key = job_input.get("comfy_org_api_key")
 
-    # Return validated data and no error
     return {
+        "mode": "comfy_workflow",
         "workflow": workflow,
         "images": images,
         "comfy_org_api_key": comfy_org_api_key,
@@ -492,6 +508,162 @@ def get_image_data(filename, subfolder, image_type):
         return None
 
 
+def _download_or_decode_input_image(image_base64=None, image_url=None):
+    """
+    Return raw image bytes from either base64 payload or URL.
+    """
+    if image_base64:
+        raw = image_base64.split(",", 1)[1] if "," in image_base64 else image_base64
+        return base64.b64decode(raw)
+
+    if image_url:
+        response = requests.get(image_url, timeout=60)
+        response.raise_for_status()
+        return response.content
+
+    raise ValueError("No input image provided")
+
+
+class SharpPredictionError(RuntimeError):
+    def __init__(self, message, diagnostics=None):
+        super().__init__(message)
+        self.diagnostics = diagnostics or {}
+
+
+def _get_sharp_version():
+    try:
+        result = subprocess.run(
+            ["sharp", "--help"],
+            capture_output=True,
+            text=True,
+            timeout=10,
+            check=False,
+        )
+        combined = f"{(result.stdout or '').strip()}\n{(result.stderr or '').strip()}".strip()
+        first_line = combined.splitlines()[0] if combined else "unknown"
+        return first_line[:200]
+    except Exception as e:
+        return f"unavailable: {e}"
+
+
+def _run_direct_sharp_prediction(job_id, validated_data):
+    """
+    Runs Apple SHARP prediction directly and returns a .ply output payload.
+    """
+    started_at = time.perf_counter()
+    sharp_checkpoint = os.environ.get(
+        "SHARP_CHECKPOINT_PATH", "/comfyui/models/sharp/sharp_2572gikvuh.pt"
+    )
+    sharp_timeout_s = int(os.environ.get("SHARP_TIMEOUT_SECONDS", 600))
+    sharp_binary_path = "/usr/local/bin/sharp"
+    if not os.path.exists(sharp_binary_path):
+        sharp_binary_path = "sharp"
+
+    diagnostics = {
+        "mode": "sharp_predict",
+        "sharp_binary": sharp_binary_path,
+        "sharp_version": _get_sharp_version(),
+        "sharp_checkpoint_path": sharp_checkpoint,
+        "checkpoint_exists": os.path.exists(sharp_checkpoint),
+        "timeout_seconds": sharp_timeout_s,
+        "timings_ms": {},
+    }
+
+    with tempfile.TemporaryDirectory(prefix="sharp_in_") as input_dir, tempfile.TemporaryDirectory(
+        prefix="sharp_out_"
+    ) as output_dir:
+        image_name = validated_data.get("image_name", "input.png") or "input.png"
+        if "." not in image_name:
+            image_name = f"{image_name}.png"
+
+        input_path = os.path.join(input_dir, os.path.basename(image_name))
+        t0 = time.perf_counter()
+        image_bytes = _download_or_decode_input_image(
+            validated_data.get("image_base64"), validated_data.get("image_url")
+        )
+        diagnostics["timings_ms"]["input_fetch_or_decode"] = int((time.perf_counter() - t0) * 1000)
+
+        t0 = time.perf_counter()
+        with open(input_path, "wb") as f:
+            f.write(image_bytes)
+        diagnostics["timings_ms"]["write_input"] = int((time.perf_counter() - t0) * 1000)
+
+        cmd = ["sharp", "predict", "-i", input_dir, "-o", output_dir]
+        if os.path.exists(sharp_checkpoint):
+            cmd.extend(["-c", sharp_checkpoint])
+        else:
+            print(
+                f"worker-comfyui - SHARP checkpoint not found at {sharp_checkpoint}; using default checkpoint resolution."
+            )
+
+        diagnostics["command"] = " ".join(cmd)
+        print(f"worker-comfyui - Running direct SHARP command: {diagnostics['command']}")
+        t0 = time.perf_counter()
+        result = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            timeout=sharp_timeout_s,
+            check=False,
+        )
+        diagnostics["timings_ms"]["sharp_predict"] = int((time.perf_counter() - t0) * 1000)
+        diagnostics["sharp_exit_code"] = result.returncode
+
+        if result.returncode != 0:
+            stderr_tail = (result.stderr or "").strip()[-4000:]
+            stdout_tail = (result.stdout or "").strip()[-2000:]
+            diagnostics["stdout_tail"] = stdout_tail
+            diagnostics["stderr_tail"] = stderr_tail
+            diagnostics["timings_ms"]["total"] = int((time.perf_counter() - started_at) * 1000)
+            raise SharpPredictionError(
+                "Direct SHARP predict failed. "
+                f"exit_code={result.returncode}. "
+                f"stdout_tail={stdout_tail} stderr_tail={stderr_tail}",
+                diagnostics=diagnostics,
+            )
+
+        t0 = time.perf_counter()
+        ply_candidates = []
+        for root, _, files in os.walk(output_dir):
+            for name in files:
+                if name.lower().endswith(".ply"):
+                    ply_candidates.append(os.path.join(root, name))
+        diagnostics["timings_ms"]["scan_outputs"] = int((time.perf_counter() - t0) * 1000)
+        diagnostics["ply_candidate_count"] = len(ply_candidates)
+
+        if not ply_candidates:
+            diagnostics["timings_ms"]["total"] = int((time.perf_counter() - started_at) * 1000)
+            raise SharpPredictionError(
+                "Direct SHARP completed but no .ply file was produced",
+                diagnostics=diagnostics,
+            )
+
+        ply_path = ply_candidates[0]
+        filename = os.path.basename(ply_path)
+        print(f"worker-comfyui - Direct SHARP produced PLY: {ply_path}")
+        diagnostics["selected_ply"] = filename
+
+        if os.environ.get("BUCKET_ENDPOINT_URL"):
+            t0 = time.perf_counter()
+            s3_url = rp_upload.upload_image(job_id, ply_path)
+            diagnostics["timings_ms"]["upload_or_encode"] = int((time.perf_counter() - t0) * 1000)
+            diagnostics["timings_ms"]["total"] = int((time.perf_counter() - started_at) * 1000)
+            return {
+                "files": [{"filename": filename, "type": "s3_url", "data": s3_url}],
+                "diagnostics": diagnostics,
+            }
+
+        t0 = time.perf_counter()
+        with open(ply_path, "rb") as f:
+            encoded = base64.b64encode(f.read()).decode("utf-8")
+        diagnostics["timings_ms"]["upload_or_encode"] = int((time.perf_counter() - t0) * 1000)
+        diagnostics["timings_ms"]["total"] = int((time.perf_counter() - started_at) * 1000)
+        return {
+            "files": [{"filename": filename, "type": "base64", "data": encoded}],
+            "diagnostics": diagnostics,
+        }
+
+
 def handler(job):
     """
     Handles a job using ComfyUI via websockets for status and image retrieval.
@@ -511,6 +683,23 @@ def handler(job):
         return {"error": error_message}
 
     # Extract validated data
+    mode = validated_data.get("mode", "comfy_workflow")
+    if mode == "sharp_predict":
+        try:
+            print("worker-comfyui - Processing direct SHARP prediction job...")
+            return _run_direct_sharp_prediction(job_id, validated_data)
+        except SharpPredictionError as e:
+            print(f"worker-comfyui - Direct SHARP typed error: {e}")
+            print(traceback.format_exc())
+            return {
+                "error": f"Direct SHARP prediction failed: {e}",
+                "diagnostics": e.diagnostics,
+            }
+        except Exception as e:
+            print(f"worker-comfyui - Direct SHARP error: {e}")
+            print(traceback.format_exc())
+            return {"error": f"Direct SHARP prediction failed: {e}"}
+
     workflow = validated_data["workflow"]
     input_images = validated_data.get("images")
 

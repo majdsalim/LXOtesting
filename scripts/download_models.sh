@@ -24,7 +24,9 @@ echo "========================================="
 # DOWNLOAD_DETECTION=true    - Detection model (~40MB)
 # DOWNLOAD_UPSCALE=true      - Upscale models (~5GB)
 # DOWNLOAD_MATANYONE=true    - MatAnyone video matting (~1.5GB)
-# DOWNLOAD_GAUSSIAN=true     - Gaussian Splatting pipeline: Qwen Image Edit, SHARP, LoRAs (~30GB)
+# DOWNLOAD_GAUSSIAN=true     - Legacy switch (enables both SHARP + Qwen Gaussian assets)
+# DOWNLOAD_SHARP_MODEL=true  - Download only SHARP checkpoint (~6GB)
+# DOWNLOAD_QWEN_GAUSSIAN=true - Download Qwen Gaussian edit assets + LoRAs (~24GB)
 #
 # DOWNLOAD_ALL=true          - Master switch (default: true = download everything)
 #                              Set to "false" then enable individual flags
@@ -51,6 +53,14 @@ echo "========================================="
 : "${DOWNLOAD_UPSCALE:=$DOWNLOAD_ALL}"
 : "${DOWNLOAD_MATANYONE:=$DOWNLOAD_ALL}"
 : "${DOWNLOAD_GAUSSIAN:=$DOWNLOAD_ALL}"
+: "${DOWNLOAD_SHARP_MODEL:=false}"
+: "${DOWNLOAD_QWEN_GAUSSIAN:=false}"
+
+# Backward-compat: legacy gaussian flag enables both sharp + qwen gaussian assets.
+if [ "$DOWNLOAD_GAUSSIAN" = "true" ]; then
+    DOWNLOAD_SHARP_MODEL="true"
+    DOWNLOAD_QWEN_GAUSSIAN="true"
+fi
 
 # BUNDLE LOGIC: WAN_CORE includes essential dependencies
 # If WAN_CORE is enabled, also enable CLIP, VAE, LoRAs, and Upscale models (required for T2V workflows)
@@ -87,7 +97,9 @@ echo "   DOWNLOAD_CONTROLNET=$DOWNLOAD_CONTROLNET   (ControlNet ~2GB)"
 echo "   DOWNLOAD_DETECTION=$DOWNLOAD_DETECTION    (Detection ~40MB)"
 echo "   DOWNLOAD_UPSCALE=$DOWNLOAD_UPSCALE      (Upscale ~5GB)"
 echo "   DOWNLOAD_MATANYONE=$DOWNLOAD_MATANYONE    (MatAnyone ~1.5GB)"
-echo "   DOWNLOAD_GAUSSIAN=$DOWNLOAD_GAUSSIAN    (Gaussian Splatting ~30GB)"
+echo "   DOWNLOAD_GAUSSIAN=$DOWNLOAD_GAUSSIAN    (Legacy: SHARP + Qwen Gaussian)"
+echo "   DOWNLOAD_SHARP_MODEL=$DOWNLOAD_SHARP_MODEL  (SHARP checkpoint only ~6GB)"
+echo "   DOWNLOAD_QWEN_GAUSSIAN=$DOWNLOAD_QWEN_GAUSSIAN (Qwen Gaussian assets ~24GB)"
 echo ""
 
 # Create ALL ComfyUI model directories for maximum compatibility
@@ -594,60 +606,55 @@ else
     echo "   ⏭️  FLUX.1-dev models SKIPPED (DOWNLOAD_FLUX=false)"
 fi
 
-# Phase 10: Gaussian Splatting Pipeline (Qwen Image Edit + SHARP)
+# Phase 10: Gaussian Splatting assets (split: SHARP vs Qwen Gaussian)
 echo "╔═══════════════════════════════════════════════════════════════════════╗"
-echo "║  PHASE 10: Gaussian Splatting Pipeline (Qwen + SHARP)                 ║"
+echo "║  PHASE 10: Gaussian Splatting Assets (SHARP / Qwen split)             ║"
 echo "╚═══════════════════════════════════════════════════════════════════════╝"
 
-if [ "$DOWNLOAD_GAUSSIAN" = "true" ]; then
-    echo "   ✅ Gaussian Splatting models enabled"
+if [ "$DOWNLOAD_SHARP_MODEL" = "true" ]; then
+    echo "   ✅ SHARP model download enabled"
+    download_parallel \
+        "https://huggingface.co/apple/Sharp/resolve/main/sharp_2572gikvuh.pt $MODEL_DIR/sharp/sharp_2572gikvuh.pt"
+else
+    echo "   ⏭️  SHARP model SKIPPED (DOWNLOAD_SHARP_MODEL=false)"
+fi
 
-    # Download 5 models in parallel (ASCII filenames — no issues)
+if [ "$DOWNLOAD_QWEN_GAUSSIAN" = "true" ]; then
+    echo "   ✅ Qwen Gaussian assets enabled"
     download_parallel \
         "https://huggingface.co/Comfy-Org/Qwen-Image_ComfyUI/resolve/main/split_files/vae/qwen_image_vae.safetensors $MODEL_DIR/vae/qwen_image_vae.safetensors" \
         "https://huggingface.co/1038lab/Qwen-Image-Edit-2511-FP8/resolve/main/Qwen-Image-Edit-2511-FP8_e4m3fn.safetensors $MODEL_DIR/diffusion_models/Qwen-Image-Edit-2511-FP8_e4m3fn.safetensors" \
         "https://huggingface.co/Comfy-Org/Qwen-Image_ComfyUI/resolve/main/split_files/text_encoders/qwen_2.5_vl_7b_fp8_scaled.safetensors $MODEL_DIR/text_encoders/qwen_2.5_vl_7b_fp8_scaled.safetensors" \
-        "https://huggingface.co/lightx2v/Qwen-Image-Edit-2511-Lightning/resolve/main/Qwen-Image-Edit-2511-Lightning-4steps-V1.0-bf16.safetensors $MODEL_DIR/loras/Qwen-Image-Edit-2511-Lightning-4steps-V1.0-bf16.safetensors" \
-        "https://huggingface.co/apple/Sharp/resolve/main/sharp_2572gikvuh.pt $MODEL_DIR/sharp/sharp_2572gikvuh.pt"
+        "https://huggingface.co/lightx2v/Qwen-Image-Edit-2511-Lightning/resolve/main/Qwen-Image-Edit-2511-Lightning-4steps-V1.0-bf16.safetensors $MODEL_DIR/loras/Qwen-Image-Edit-2511-Lightning-4steps-V1.0-bf16.safetensors"
 
-    # Special handling: Gaussian Splash (Sharp) LoRA has Chinese characters in filename
-    # (高斯泼溅-Sharp.safetensors) — URL-encoded chars cause 401 on HuggingFace CDN redirect.
-    # Use huggingface-cli which handles non-ASCII filenames properly.
+    # Optional Gaussian Splash LoRA with non-ASCII filename.
     GAUSSIAN_LORA_TARGET="$MODEL_DIR/loras/高斯泼溅-Sharp.safetensors"
     if [ -f "$GAUSSIAN_LORA_TARGET" ]; then
         echo "   ✅ 高斯泼溅-Sharp.safetensors already exists, skipping..."
     else
         echo "   📥 Downloading 高斯泼溅-Sharp.safetensors (Gaussian Splash LoRA)..."
-        echo "      Using huggingface-cli (handles Chinese filename correctly)"
         GAUSSIAN_TMP=$(mktemp -d)
         if huggingface-cli download \
             dx8152/Qwen-Image-Edit-2511-Gaussian-Splash \
             "高斯泼溅-Sharp.safetensors" \
             --local-dir "$GAUSSIAN_TMP" \
             --local-dir-use-symlinks False 2>&1; then
-
             if [ -f "$GAUSSIAN_TMP/高斯泼溅-Sharp.safetensors" ]; then
                 mv "$GAUSSIAN_TMP/高斯泼溅-Sharp.safetensors" "$GAUSSIAN_LORA_TARGET"
                 echo "   ✅ 高斯泼溅-Sharp.safetensors downloaded successfully"
-            else
-                echo "   ❌ 高斯泼溅-Sharp.safetensors not found after download"
             fi
         else
-            # Fallback: use curl -L which handles redirects better than wget for encoded URLs
             echo "   ⚠️  huggingface-cli failed, trying curl..."
             curl -L -o "$GAUSSIAN_LORA_TARGET" \
                 "https://huggingface.co/dx8152/Qwen-Image-Edit-2511-Gaussian-Splash/resolve/main/%E9%AB%98%E6%96%AF%E6%B3%BC%E6%BA%85-Sharp.safetensors"
-            if [ -f "$GAUSSIAN_LORA_TARGET" ] && [ -s "$GAUSSIAN_LORA_TARGET" ]; then
-                echo "   ✅ 高斯泼溅-Sharp.safetensors downloaded via curl"
-            else
-                echo "   ❌ 高斯泼溅-Sharp.safetensors download failed"
+            if [ ! -f "$GAUSSIAN_LORA_TARGET" ] || [ ! -s "$GAUSSIAN_LORA_TARGET" ]; then
                 rm -f "$GAUSSIAN_LORA_TARGET"
             fi
         fi
         rm -rf "$GAUSSIAN_TMP"
     fi
 else
-    echo "   ⏭️  Gaussian Splatting models SKIPPED (DOWNLOAD_GAUSSIAN=false)"
+    echo "   ⏭️  Qwen Gaussian assets SKIPPED (DOWNLOAD_QWEN_GAUSSIAN=false)"
 fi
 
 # Final summary

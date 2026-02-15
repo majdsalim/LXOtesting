@@ -110,9 +110,11 @@ echo ""\n\
 TCMALLOC="$(ldconfig -p | grep -Po "libtcmalloc.so.\\d" | head -n 1)"\n\
 export LD_PRELOAD="${TCMALLOC}"\n\
 \n\
-# Ensure /comfyui has proper permissions\n\
-chmod -R 777 /comfyui\n\
-chown -R root:root /comfyui\n\
+# Ensure /comfyui has proper permissions when present\n\
+if [ -d /comfyui ]; then\n\
+  chmod -R 777 /comfyui\n\
+  chown -R root:root /comfyui\n\
+fi\n\
 \n' > /start.sh
 
 # --- Mode-specific section ---
@@ -190,56 +192,56 @@ echo "╚═══════════════════════�
 /scripts/download_models.sh\n\
 echo ""\n\
 \n\
-# Allow operators to tweak verbosity; default is DEBUG\n\
-: "${COMFY_LOG_LEVEL:=DEBUG}"\n\
+# Optional ComfyUI boot for serverless (default true).\n\
+: "${ENABLE_COMFYUI:=true}"\n\
+if [ "$ENABLE_COMFYUI" = "true" ]; then\n\
+  : "${COMFY_LOG_LEVEL:=DEBUG}"\n\
+  : "${COMFY_VRAM_MODE:=normalvram}"\n\
+  VRAM_FLAG=""\n\
+  case "$COMFY_VRAM_MODE" in\n\
+      highvram)  VRAM_FLAG="--highvram" ;;\n\
+      gpu-only)  VRAM_FLAG="--gpu-only" ;;\n\
+      lowvram)   VRAM_FLAG="--lowvram" ;;\n\
+      novram)    VRAM_FLAG="--novram" ;;\n\
+      normal*)   VRAM_FLAG="" ;;\n\
+      *)         VRAM_FLAG="--highvram" ;;\n\
+  esac\n\
 \n\
-# VRAM management mode\n\
-: "${COMFY_VRAM_MODE:=normalvram}"\n\
-VRAM_FLAG=""\n\
-case "$COMFY_VRAM_MODE" in\n\
-    highvram)  VRAM_FLAG="--highvram" ;;\n\
-    gpu-only)  VRAM_FLAG="--gpu-only" ;;\n\
-    lowvram)   VRAM_FLAG="--lowvram" ;;\n\
-    novram)    VRAM_FLAG="--novram" ;;\n\
-    normal*)   VRAM_FLAG="" ;;\n\
-    *)         VRAM_FLAG="--highvram" ;;\n\
-esac\n\
+  echo "╔═══════════════════════════════════════════════════════════════════╗"\n\
+  echo "║  COMFYUI STARTING (Background) - Serverless Mode                   ║"\n\
+  echo "╚═══════════════════════════════════════════════════════════════════╝"\n\
+  echo "   SageAttention: ENABLED"\n\
+  echo "   Log Level: ${COMFY_LOG_LEVEL}"\n\
+  echo "   VRAM Mode: ${COMFY_VRAM_MODE} ${VRAM_FLAG}"\n\
+  echo "   Listening: localhost:8188 (internal only)"\n\
+  echo ""\n\
 \n\
-echo "╔═══════════════════════════════════════════════════════════════════╗"\n\
-echo "║  COMFYUI STARTING (Background) - Serverless Mode                   ║"\n\
-echo "╚═══════════════════════════════════════════════════════════════════╝"\n\
-echo "   SageAttention: ENABLED"\n\
-echo "   Log Level: ${COMFY_LOG_LEVEL}"\n\
-echo "   VRAM Mode: ${COMFY_VRAM_MODE} ${VRAM_FLAG}"\n\
-echo "   Listening: localhost:8188 (internal only)"\n\
-echo ""\n\
+  python -u /comfyui/main.py \\\n\
+      --disable-auto-launch \\\n\
+      --disable-metadata \\\n\
+      --verbose "${COMFY_LOG_LEVEL}" \\\n\
+      --log-stdout \\\n\
+      --use-sage-attention \\\n\
+      $VRAM_FLAG &\n\
 \n\
-# Start ComfyUI in BACKGROUND (localhost only — handler.py talks to it internally)\n\
-python -u /comfyui/main.py \\\n\
-    --disable-auto-launch \\\n\
-    --disable-metadata \\\n\
-    --verbose "${COMFY_LOG_LEVEL}" \\\n\
-    --log-stdout \\\n\
-    --use-sage-attention \\\n\
-    $VRAM_FLAG &\n\
+  echo "Waiting for ComfyUI to become ready on 127.0.0.1:8188..."\n\
+  MAX_WAIT=600\n\
+  WAITED=0\n\
+  while [ $WAITED -lt $MAX_WAIT ]; do\n\
+      if curl -s -o /dev/null -w "%%{http_code}" http://127.0.0.1:8188/ 2>/dev/null | grep -q "200"; then\n\
+          echo "ComfyUI is ready! (waited ${WAITED}s)"\n\
+          break\n\
+      fi\n\
+      sleep 5\n\
+      WAITED=$((WAITED + 5))\n\
+      echo "   ...still waiting (${WAITED}s / ${MAX_WAIT}s)"\n\
+  done\n\
 \n\
-# Wait for ComfyUI to be fully ready before starting the handler\n\
-# The handler only retries for 25s which is not enough on cold boot\n\
-echo "Waiting for ComfyUI to become ready on 127.0.0.1:8188..."\n\
-MAX_WAIT=600\n\
-WAITED=0\n\
-while [ $WAITED -lt $MAX_WAIT ]; do\n\
-    if curl -s -o /dev/null -w "%%{http_code}" http://127.0.0.1:8188/ 2>/dev/null | grep -q "200"; then\n\
-        echo "ComfyUI is ready! (waited ${WAITED}s)"\n\
-        break\n\
-    fi\n\
-    sleep 5\n\
-    WAITED=$((WAITED + 5))\n\
-    echo "   ...still waiting (${WAITED}s / ${MAX_WAIT}s)"\n\
-done\n\
-\n\
-if [ $WAITED -ge $MAX_WAIT ]; then\n\
-    echo "ERROR: ComfyUI did not start within ${MAX_WAIT}s. Starting handler anyway."\n\
+  if [ $WAITED -ge $MAX_WAIT ]; then\n\
+      echo "ERROR: ComfyUI did not start within ${MAX_WAIT}s. Starting handler anyway."\n\
+  fi\n\
+else\n\
+  echo "⚡ ENABLE_COMFYUI=false: skipping ComfyUI boot (direct SHARP mode)."\n\
 fi\n\
 \n\
 echo ""\n\
