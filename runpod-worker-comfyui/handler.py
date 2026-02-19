@@ -643,23 +643,70 @@ def _run_direct_sharp_prediction(job_id, validated_data):
         print(f"worker-comfyui - Direct SHARP produced PLY: {ply_path}")
         diagnostics["selected_ply"] = filename
 
-        if os.environ.get("BUCKET_ENDPOINT_URL"):
+        # Convert PLY to SOG (super-compressed format, ~6x smaller)
+        sog_path = ply_path.replace(".ply", ".sog")
+        t0 = time.perf_counter()
+        try:
+            conversion = subprocess.run(
+                ["splat-transform", ply_path, sog_path, "--filter-nan", "-g", "cpu"],
+                capture_output=True,
+                text=True,
+                timeout=120,
+            )
+            diagnostics["timings_ms"]["sog_conversion"] = int((time.perf_counter() - t0) * 1000)
+            diagnostics["sog_exit_code"] = conversion.returncode
+
+            if conversion.returncode == 0 and os.path.exists(sog_path):
+                output_path = sog_path
+                print(f"worker-comfyui - PLY->SOG conversion succeeded: {sog_path}")
+            else:
+                output_path = ply_path
+                print(f"worker-comfyui - SOG conversion failed, falling back to PLY: {conversion.stderr}")
+                diagnostics["sog_stderr"] = (conversion.stderr or "")[:2000]
+        except (subprocess.TimeoutExpired, FileNotFoundError) as conv_err:
+            diagnostics["timings_ms"]["sog_conversion"] = int((time.perf_counter() - t0) * 1000)
+            output_path = ply_path
+            print(f"worker-comfyui - SOG conversion error, falling back to PLY: {conv_err}")
+            diagnostics["sog_error"] = str(conv_err)[:500]
+
+        output_filename = os.path.basename(output_path)
+        output_size = os.path.getsize(output_path)
+        diagnostics["output_filename"] = output_filename
+        diagnostics["output_size_bytes"] = output_size
+
+        MAX_INLINE_SIZE = 20 * 1024 * 1024  # 20 MB
+
+        if output_size <= MAX_INLINE_SIZE:
             t0 = time.perf_counter()
-            s3_url = rp_upload.upload_image(job_id, ply_path)
+            with open(output_path, "rb") as f:
+                encoded = base64.b64encode(f.read()).decode("utf-8")
             diagnostics["timings_ms"]["upload_or_encode"] = int((time.perf_counter() - t0) * 1000)
+            diagnostics["delivery"] = "inline_base64"
             diagnostics["timings_ms"]["total"] = int((time.perf_counter() - started_at) * 1000)
             return {
-                "files": [{"filename": filename, "type": "s3_url", "data": s3_url}],
+                "files": [{"filename": output_filename, "type": "base64", "data": encoded}],
+                "diagnostics": diagnostics,
+            }
+
+        if os.environ.get("BUCKET_ENDPOINT_URL"):
+            t0 = time.perf_counter()
+            s3_url = rp_upload.upload_image(job_id, output_path)
+            diagnostics["timings_ms"]["upload_or_encode"] = int((time.perf_counter() - t0) * 1000)
+            diagnostics["delivery"] = "s3_url"
+            diagnostics["timings_ms"]["total"] = int((time.perf_counter() - started_at) * 1000)
+            return {
+                "files": [{"filename": output_filename, "type": "s3_url", "data": s3_url}],
                 "diagnostics": diagnostics,
             }
 
         t0 = time.perf_counter()
-        with open(ply_path, "rb") as f:
+        with open(output_path, "rb") as f:
             encoded = base64.b64encode(f.read()).decode("utf-8")
         diagnostics["timings_ms"]["upload_or_encode"] = int((time.perf_counter() - t0) * 1000)
+        diagnostics["delivery"] = "inline_base64_large"
         diagnostics["timings_ms"]["total"] = int((time.perf_counter() - started_at) * 1000)
         return {
-            "files": [{"filename": filename, "type": "base64", "data": encoded}],
+            "files": [{"filename": output_filename, "type": "base64", "data": encoded}],
             "diagnostics": diagnostics,
         }
 
